@@ -102,3 +102,38 @@
 | Kara Ayı | 12 | agresif | 320 |
 
 Oyuncunun seviyesi canavardan 5'ten fazla yüksekse tecrübe yarıya, 10'dan fazla yüksekse onda bire düşer.
+
+# Aşama 4: Eşya, Yükseltme ve Efsun (`items.js`)
+
+## Eşyalar
+- Sınıf silahları (Demir Kılıç, Çelik Hançer, Ruh Palası, Ardıç Asası), Deri Zırh, Demir Miğfer.
+- Silah saldırı gücünü (hasara %), zırh ve miğfer savunmayı (alınan hasardan %) ve canı artırır. Her + seviye temel değeri çarpar: +0 ×1 … +9 ×2.7.
+- Malzemeler: Kara Demir Parçası, Ay Taşı, Kadim Pul. Parşömenler: Kutsama Parşömeni, Büyülü Metal. Efsun eşyaları: Efsun Taşı, Değişim Tozu.
+- Yeni karakter başlangıç eşyalarıyla ve 5000 altınla başlar.
+- **Geçici:** Canavarlar altın ve malzemeyi doğrudan çantaya verir. Aşama 5'te yere düşen ganimete dönüşecek.
+
+## Yükseltme (köydeki demircide)
+| Seviye | Şans | Altın | Malzeme |
+|---|---|---|---|
+| +0→+1 | %100 | 500 | – |
+| +1→+2 | %95 | 1.000 | – |
+| +2→+3 | %90 | 2.000 | – |
+| +3→+4 | %80 | 4.000 | – |
+| +4→+5 | %70 | 7.000 | Kara Demir ×1 |
+| +5→+6 | %50 | 10.000 | Kara Demir ×2 |
+| +6→+7 | %40 | 15.000 | Ay Taşı ×1 |
+| +7→+8 | %25 | 22.000 | Ay Taşı ×2 |
+| +8→+9 | %15 | 30.000 | Kadim Pul ×1 |
+
+- Başarısızlıkta: standart demircide eşya **yanar**, Kutsama Parşömeni ile **1 seviye düşer**, Büyülü Metal ile **aynı kalır**.
+- Ücret ve malzeme her durumda ödenir. Rastgelelik sunucuda `crypto.randomInt` ile üretilir.
+- Sunucu, oyuncunun demirciye 170 px'ten yakın olduğunu kontrol eder. Sonuç anında veritabanına yazılır.
+- 100.000 denemelik testte her seviyenin ölçülen başarı oranı tablodakiyle ±%0.5 içinde.
+
+## Efsun
+- 15 efsun: Maks. Can, Maks. Mana, Kritik, Delici Vuruş, Saldırı Hızı, Hareket Hızı, Canavarlara Karşı Güç, Oyunculara Karşı Güç, Kılıç Savunması, Büyü Savunması, Can Emme, Mana Emme, Sersemletme, Güç, Çeviklik.
+- Her efsunun 5 kademesi var (yüzdelikler için %2 / %4 / %6 / %10 / %15). Kademe ağırlıklı rastgele seçilir: 40 / 30 / 18 / 9 / 3.
+- Silah, zırh ve miğferin kendine özgü efsun havuzu var.
+- **Efsun Taşı:** boş yuvaya, eşyada olmayan bir efsun ekler. Başarı şansı 1. efsunda %100'den 5. efsunda %25'e düşer. 1-5 temel yuvalardır, 6-7 özel efsunlar için ayrıldı.
+- **Değişim Tozu:** efsun sayısı aynı kalır, hepsi kısmi Fisher-Yates karıştırmayla **tekrarsız** yeniden çekilir.
+- Bütün efsunlar savaşa gerçekten etki eder (hasar, savunma türü, saldırı ve hareket hızı, can ve mana emme, sersemletme, delici vuruş).

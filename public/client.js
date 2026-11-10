@@ -221,6 +221,7 @@ function handle(m) {
       el.querySelector('span').textContent = s.name;
       el.title = `${s.name} (${s.mp} mana, ${s.cd} sn)\n${s.desc}`;
     }
+    if (window.itemsUI) itemsUI.init(m);
     toast(`${FACTIONS[myFaction].name}'na hoş geldin!`);
     addChat('Köyün dışındaki kuklalarla antrenman yap, sonra düşman krallıkları avla!', true);
     addChat('Kendi krallığından oyunculara vuramazsın. Köyler güvenli bölgedir.', true);
@@ -247,6 +248,8 @@ function handle(m) {
   } else if (m.t === 'respawn') {
     deadUntil = 0;
     $('#death').classList.add('hidden');
+  } else if (window.itemsUI) {
+    itemsUI.handle(m);
   }
 }
 
@@ -262,7 +265,7 @@ function toast(text) {
 function onEvent(ev) {
   const t = performance.now();
   if (ev.t === 'dmg') {
-    const txt = (ev.bs ? 'ARKADAN! ' : '') + (ev.c ? 'KRİTİK ' : '') + '-' + ev.v;
+    const txt = (ev.bs ? 'ARKADAN! ' : '') + (ev.p ? 'DELİCİ ' : '') + (ev.c ? 'KRİTİK ' : '') + '-' + ev.v;
     floaters.push({ x: ev.x + (Math.random() * 20 - 10), y: ev.y - 30, txt, col: ev.bs ? '#ff3aff' : ev.c ? '#ffd04a' : '#ff5a4a', t, big: ev.c || ev.bs });
   } else if (ev.t === 'heal') floaters.push({ x: ev.x, y: ev.y - 30, txt: '+' + (ev.v || ''), col: '#6aff7a', t });
   else if (ev.t === 'swing') swings.push({ id: ev.id, a: ev.a, r: ev.r, t, s: ev.s });
@@ -327,6 +330,7 @@ addEventListener('keydown', (e) => {
   }
   if (chatting) { if (e.key === 'Escape') { chatting = false; $('#chatin').blur(); } return; }
   const k = e.key.toLowerCase();
+  if (window.itemsUI && itemsUI.key(k)) return;
   keys[k] = true;
   if (SKILL_KEYS.includes(k)) send({ t: 'skill', k });
   if (k === ' ') e.preventDefault();
@@ -474,6 +478,8 @@ function drawWorld(cam) {
     ctx.fillText(FACTIONS[v.f].short.toUpperCase() + ' KÖYÜ', v.x, v.y + 10);
     ctx.font = '13px sans-serif'; ctx.fillText('Güvenli Bölge', v.x, v.y + 30);
   }
+
+  if (window.itemsUI) itemsUI.drawWorld();
 
   // kayalar
   for (const r of MAP.rocks) {
@@ -689,6 +695,7 @@ function frame() {
 
   if (me && t - lastHud > 80) {
     lastHud = t;
+    if (window.itemsUI) itemsUI.tick();
     const m = state.me;
     setBar('#hpb', me.hp, me.mh, `CAN ${me.hp} / ${me.mh}`);
     setBar('#mpb', m.mp, m.mm, `MANA ${m.mp} / ${m.mm}`);

@@ -94,6 +94,44 @@
   #toast { position: fixed; top: 22%; left: 50%; transform: translateX(-50%); z-index: 8; text-align: center; pointer-events: none;
     font-size: clamp(18px, 4vw, 28px); font-weight: bold; color: #e8b04a; text-shadow: 0 2px 6px #000; transition: opacity .6s; opacity: 0; }
 
+  /* Çanta ve demirci */
+  #bInv { position: absolute; left: 140px; top: 92px; pointer-events: auto; background: #0009; color: #e8b04a; border: 1px solid #6b4a2a; border-radius: 8px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+  #smithHint { position: absolute; left: 50%; top: 70px; transform: translateX(-50%); background: #000b; border: 1px solid #e8b04a; border-radius: 8px; padding: 6px 12px; font-size: 14px; }
+  .ipanel { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 12; width: min(680px, 96vw); max-height: 92vh; overflow-y: auto;
+    background: #1e100ef2; border: 2px solid #6b4a2a; border-radius: 14px; box-shadow: 0 10px 40px #000a; touch-action: auto; }
+  .ihead { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid #5a3a2a; }
+  .ihead b { color: #e8b04a; font-size: 17px; }
+  .ihead span { color: #ffd04a; font-size: 14px; margin-left: auto; }
+  .ihead .x { background: none; border: 0; color: #c9a98a; font-size: 20px; cursor: pointer; }
+  .ibody { display: grid; grid-template-columns: auto 1fr; gap: 14px; padding: 12px 14px; }
+  @media (max-width: 600px) { .ibody { grid-template-columns: 1fr; } }
+  @media (max-height: 500px) { .ihead { padding: 6px 12px; } .ibody { padding: 6px 12px; gap: 10px; } .icell { width: 40px; height: 40px; } #invBag, #smithItems { grid-template-columns: repeat(6, 40px); } .icell .ico { font-size: 20px; } }
+  .ilabel { color: #c9a98a; font-size: 12px; margin: 6px 0 4px; text-transform: uppercase; letter-spacing: 1px; }
+  #invEquip { display: flex; gap: 8px; }
+  .eqslot { text-align: center; } .eqslot small { color: #a88d74; font-size: 11px; }
+  #invBag, #smithItems { display: grid; grid-template-columns: repeat(6, 46px); gap: 4px; }
+  .icell { width: 46px; height: 46px; border-radius: 6px; background: #0007; border: 1px solid #5a3a2a; position: relative; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; }
+  .icell.empty { cursor: default; opacity: .6; }
+  .icell.sel { border-color: #e8b04a; box-shadow: 0 0 8px #e8b04a88; }
+  .icell.worn { border-color: #7ab8ff; }
+  .icell .ico { font-size: 24px; }
+  .icell .plus { position: absolute; top: 1px; right: 3px; font-size: 11px; font-weight: bold; color: #ffd04a; text-shadow: 0 1px 2px #000; }
+  .icell .cnt { position: absolute; bottom: 1px; right: 3px; font-size: 11px; color: #fff; text-shadow: 0 1px 2px #000; }
+  #invDetail, #smithInfo { font-size: 14px; line-height: 1.6; min-width: 200px; }
+  #invDetail b, #smithInfo b { color: #e8b04a; font-size: 16px; display: block; margin-bottom: 4px; }
+  .muted { color: #a88d74; }
+  .acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .sbtn { background: #3a1d18; color: #f3e9d2; border: 1px solid #a0703a; border-radius: 8px; padding: 7px 10px; font-size: 13px; cursor: pointer; }
+  .sbtn:hover { border-color: #e8b04a; }
+  .chance { font-size: 16px; font-weight: bold; margin: 4px 0; }
+  #smithProt { width: 100%; padding: 8px; border-radius: 8px; background: #140a09; color: #f3e9d2; border: 1px solid #5a3a2a; font-size: 13px; }
+  #smithWarn { color: #ff6a5a; font-size: 13px; min-height: 18px; margin-top: 4px; }
+  #smithResult { margin-top: 10px; font-weight: bold; min-height: 22px; }
+  #tInv { left: 50%; top: 10px; transform: translateX(calc(-50% + 56px)); width: 44px; height: 44px; font-size: 18px; border-radius: 10px; }
+  #tSmith { left: 50%; top: 10px; transform: translateX(calc(-50% + 112px)); width: 44px; height: 44px; font-size: 18px; border-radius: 10px; background: #e8b04a33; }
+  body.touch #bInv { display: none; }
+
   /* Dokunmatik kontroller */
   #touch { position: fixed; inset: 0; z-index: 6; pointer-events: none; }
   #joy { position: absolute; left: 30px; bottom: 120px; width: 130px; height: 130px; border-radius: 50%; background: #ffffff14; border: 2px solid #ffffff30; pointer-events: auto; }
@@ -188,6 +226,8 @@
 <div id="hud" class="hidden">
   <div id="info"></div>
   <button id="exit">⟵ Karakter seç</button>
+  <button id="bInv">🎒 Çanta (I)</button>
+  <div id="smithHint" class="hidden">🔨 Demirciyi açmak için <b>G</b></div>
   <div id="board"><h4>🏆 EN İYİLER</h4><div id="boardList"></div></div>
   <div id="feed"></div>
   <div id="chat"><div id="chatlog"></div><input id="chatin" maxlength="120" placeholder="Mesaj yaz, Enter ile gönder"></div>
@@ -215,6 +255,41 @@
   <div class="tb" id="tR">R</div>
   <div class="tb" id="tF">F</div>
   <div class="tb" id="tChat">💬</div>
+  <div class="tb" id="tInv">🎒</div>
+  <div class="tb hidden" id="tSmith">🔨</div>
+</div>
+
+<!-- ÇANTA -->
+<div id="invPanel" class="ipanel hidden">
+  <div class="ihead"><b>🎒 Çanta</b><span id="invGold"></span><button class="x" id="invClose">✕</button></div>
+  <div class="ibody">
+    <div>
+      <div class="ilabel">Kuşanılanlar</div>
+      <div id="invEquip"></div>
+      <div class="ilabel">Çanta</div>
+      <div id="invBag"></div>
+    </div>
+    <div id="invDetail"></div>
+  </div>
+</div>
+
+<!-- DEMİRCİ -->
+<div id="smithPanel" class="ipanel hidden">
+  <div class="ihead"><b>🔨 Demirci</b><span id="smithGold"></span><button class="x" id="smithClose">✕</button></div>
+  <div class="ibody">
+    <div>
+      <div class="ilabel">Yükseltilecek eşyayı seç</div>
+      <div id="smithItems"></div>
+    </div>
+    <div>
+      <div id="smithInfo"></div>
+      <div class="ilabel">Koruma</div>
+      <select id="smithProt"></select>
+      <div id="smithWarn"></div>
+      <button class="big" id="smithGo">YÜKSELT</button>
+      <div id="smithResult"></div>
+    </div>
+  </div>
 </div>
 
 <div id="death" class="hidden"><h2>ÖLDÜN</h2><p id="deathMsg"></p></div>
@@ -222,5 +297,6 @@
 
 <script src="config.js"></script>
 <script src="client.js"></script>
+<script src="items-ui.js"></script>
 </body>
 </html>

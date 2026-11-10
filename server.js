@@ -9,6 +9,7 @@ const { WebSocketServer } = require('ws');
 const db = require('./db');
 const { SpatialGrid } = require('./aoi');
 const { ActionGate, CheatMonitor, auditMove } = require('./anticheat');
+const I = require('./items');
 
 const scrypt = promisify(crypto.scrypt);
 const PORT = process.env.PORT || 3000;
@@ -36,6 +37,7 @@ const MAP = {
   w: 3000,
   h: 2400,
   villages: Object.entries(FACTIONS).map(([f, d]) => ({ f, x: d.village.x, y: d.village.y, r: VILLAGE_R })),
+  smiths: Object.values(FACTIONS).map((d) => ({ x: d.village.x + 120, y: d.village.y + 115 })),
   rocks: [
     { x: 1000, y: 700, r: 70 }, { x: 1500, y: 500, r: 60 }, { x: 2000, y: 700, r: 70 },
     { x: 1200, y: 1200, r: 90 }, { x: 1800, y: 1200, r: 80 }, { x: 1500, y: 900, r: 50 },
@@ -193,12 +195,21 @@ function breakInvis(p) {
   if (hasFx(p, 'iv')) clearFx(p, 'iv');
 }
 
+// Karakter değerleri: sınıf + seviye + statüler + kuşanılmış eşyalar + efsunlar
 function recalcStats(p) {
   const c = CLASSES[p.cls];
-  p.mh = Math.round(c.hp * scale(p) * (1 + (p.stats.vit - 5) * 0.02));
-  p.mm = Math.round(c.mp * scale(p) * (1 + (p.stats.int - 5) * 0.02));
-  p.crit = BASE_CRIT + p.stats.dex * 0.004;
+  const eq = I.equipStats(p.inv || []);
+  const b = eq.bonus;
+  p.eqAtk = eq.atk; // hasara yüzde
+  p.eqDef = eq.def; // alınan hasardan yüzde azaltma
+  p.bonus = b;
+  p.mh = Math.round(c.hp * scale(p) * (1 + (p.stats.vit - 5) * 0.02)) + eq.hp + (b.hp || 0);
+  p.mm = Math.round(c.mp * scale(p) * (1 + (p.stats.int - 5) * 0.02)) + (b.mp || 0);
+  p.crit = BASE_CRIT + (p.stats.dex + (b.dex || 0)) * 0.004 + (b.crit || 0) / 100;
+  if (p.hp > p.mh) p.hp = p.mh;
+  if (p.mp > p.mm) p.mp = p.mm;
 }
+const bonusOf = (p, k) => (p.bonus && p.bonus[k]) || 0;
 
 function heal(src, target, base) {
   const amount = Math.round(base * scale(src));
@@ -212,22 +223,31 @@ function heal(src, target, base) {
 function dealDamage(src, target, amount, opts = {}) {
   if (!canHurt(src, target)) return 0;
   if (inSafe(target) || (isPlayer(src) && inSafe(src))) return 0;
-  let crit = false;
+  let crit = false, pierce = false;
   if (isPlayer(src)) {
-    amount *= 1 + mod(src, 'atk');
+    amount *= 1 + mod(src, 'atk') + src.eqAtk / 100 + (src.stats.str + bonusOf(src, 'str') - 5) * 0.01;
+    amount *= 1 + (target.mob || target.dummy ? bonusOf(src, 'vsMonster') : bonusOf(src, 'vsPlayer')) / 100;
+    if (Math.random() < bonusOf(src, 'pierce') / 100) pierce = true; // delici: savunmayı yok sayar
     if (opts.mul) amount *= opts.mul;
     if (src.ambush) { amount *= 1.5; src.ambush = false; } // gölgeden çıkan ilk vuruş
     if (!opts.noCrit && Math.random() < src.crit + mod(src, 'crit')) { amount *= CRIT_MUL; crit = true; }
   }
   amount *= Math.max(0.1, 1 + mod(target, 'taken'));
+  if (isPlayer(target) && !pierce) {
+    const def = target.eqDef + bonusOf(target, opts.magic ? 'magicDef' : 'meleeDef');
+    amount *= 1 - Math.min(0.75, def / 100);
+  }
   amount = Math.max(1, Math.round(amount));
   target.hp -= amount;
-  events.push({ t: 'dmg', x: Math.round(target.x), y: Math.round(target.y), v: amount, c: crit ? 1 : 0, bs: opts.bs ? 1 : 0 });
+  events.push({ t: 'dmg', x: Math.round(target.x), y: Math.round(target.y), v: amount, c: crit ? 1 : 0, bs: opts.bs ? 1 : 0, p: pierce ? 1 : 0 });
 
   // can çalma (Ruh Kılıcı aurası)
   if (isPlayer(src) && !src.dead) {
-    const ls = mod(src, 'lifesteal');
+    const ls = mod(src, 'lifesteal') + bonusOf(src, 'lifesteal') / 100;
     if (ls > 0) src.hp = Math.min(src.mh, src.hp + amount * ls);
+    const ms = bonusOf(src, 'manasteal') / 100;
+    if (ms > 0) src.mp = Math.min(src.mm, src.mp + amount * ms);
+    if (!opts.stun && Math.random() < bonusOf(src, 'stun') / 100) opts = { ...opts, stun: 0.5 };
   }
   // geri savurma + sersemletme
   if (opts.kb && !target.dummy && !(target.mob && target.heavy)) {
@@ -347,7 +367,7 @@ function spinCombo(p, m) {
 function wave(p, m) {
   const R = 175, ARC = 1.7;
   events.push({ t: 'wave', id: p.id, a: +p.angle.toFixed(2), r: R, arc: ARC, x: Math.round(p.x), y: Math.round(p.y) });
-  hitCone(p, R, ARC, (t) => dealDamage(p, t, 30 * m, { kb: 520, stun: 0.3 }));
+  hitCone(p, R, ARC, (t) => dealDamage(p, t, 30 * m, { kb: 520, stun: 0.3, magic: true }));
 }
 
 function backstab(p, m) {
@@ -361,7 +381,7 @@ function backstab(p, m) {
 function basicAttack(p) {
   const c = CLASSES[p.cls];
   // saldırı hızı tamamen sunucu saatine bağlı: istemci ne kadar hızlı tıklarsa tıklasın değişmez
-  if (!p.gate.tryUse('atk', now, c.atk.cd)) return;
+  if (!p.gate.tryUse('atk', now, c.atk.cd / (1 + bonusOf(p, 'atkSpeed') / 100))) return;
   breakInvis(p);
   const dmg = c.atk.dmg * dmgMul(p);
   if (c.atk.type === 'melee') {
@@ -384,7 +404,7 @@ function useSkill(p, key) {
 function explode(pr, owner) {
   events.push({ t: 'boom', x: Math.round(pr.x), y: Math.round(pr.y) });
   hitCircle(pr.x, pr.y, owner, 95, (t) => {
-    if (t.id !== pr.owner) dealDamage(owner, t, pr.dmg, { kb: 200, from: pr });
+    if (t.id !== pr.owner) dealDamage(owner, t, pr.dmg, { kb: 200, from: pr, magic: true });
   });
 }
 
@@ -587,6 +607,7 @@ function onMobDeath(m, src) {
     const xp = Math.max(1, Math.round(m.xp * mul));
     gainXp(src, xp);
     events.push({ t: 'xp', id: src.id, v: xp, x: Math.round(m.x), y: Math.round(m.y) });
+    autoLoot(src, m);
   }
 }
 
@@ -713,7 +734,7 @@ function update() {
     }
 
     const px = p.x, py = p.y;
-    const speed = c.speed * (1 + mod(p, 'speed'));
+    const speed = c.speed * (1 + mod(p, 'speed') + bonusOf(p, 'moveSpeed') / 100);
     let maxSpeed = speed;
 
     if (p.dash && p.dash.until > now) {
@@ -787,7 +808,7 @@ function update() {
         if (t.id === pr.owner) continue;
         if (owner && !canHurt(owner, t)) continue; // dost oyuncunun içinden geçer
         if (dist(pr, t) < (t.r || PLAYER_R) + pr.r) {
-          if (pr.kind !== 'fire') dealDamage(owner, t, pr.dmg, { kb: 40, from: pr, stun: pr.extra && pr.extra.stun });
+          if (pr.kind !== 'fire') dealDamage(owner, t, pr.dmg, { kb: 40, from: pr, stun: pr.extra && pr.extra.stun, magic: true });
           if (pr.kind === 'poison' && isPlayer(t) && !t.dead && !inSafe(t)) {
             t.poison = { until: now + 4, dps: 8 * (owner ? dmgMul(owner) : 1), src: pr.owner, acc: 0 };
           }
@@ -876,6 +897,140 @@ function broadcast() {
     sendTo(me, msg);
   }
 }
+
+// ---------------- EŞYA İŞLEMLERİ ----------------
+const SMITH_RANGE = 170;
+const CLASS_WEAPON = { savasci: 1001, golge: 1011, buyucu: 1021, saman: 1031 };
+
+// Yeni karakterin başlangıç eşyaları
+function giveStarterKit(p) {
+  p.inv.push({ container: I.EQUIP, slot: I.EQUIP_SLOT.weapon, itemId: CLASS_WEAPON[p.cls], count: 1, plus: 0, attrs: I.emptyAttrs() });
+  p.inv.push({ container: I.EQUIP, slot: I.EQUIP_SLOT.armor, itemId: 2001, count: 1, plus: 0, attrs: I.emptyAttrs() });
+  p.inv.push({ container: I.EQUIP, slot: I.EQUIP_SLOT.helmet, itemId: 2101, count: 1, plus: 0, attrs: I.emptyAttrs() });
+  I.giveItem(p.inv, 3001, 3);
+  I.giveItem(p.inv, 4001, 1);
+  I.giveItem(p.inv, 4002, 1);
+  I.giveItem(p.inv, 5001, 3);
+  I.giveItem(p.inv, 5002, 2);
+  if (!p.gold) p.gold = 5000;
+  saveInv(p);
+  saveChar(p);
+}
+
+// GEÇİCİ: canavar ganimeti doğrudan çantaya gelir (Aşama 5'te yere düşen ganimet sistemine dönüşecek)
+const MOB_LOOT = {
+  tilki: [],
+  kurt: [[3001, 0.08]],
+  domuz: [[3001, 0.15], [5001, 0.02]],
+  haydut: [[3001, 0.2], [3002, 0.04], [4001, 0.03], [5001, 0.03], [5002, 0.02]],
+  ayi: [[3002, 0.15], [3003, 0.06], [4002, 0.05], [5001, 0.08], [5002, 0.06]],
+};
+function autoLoot(p, m) {
+  const gold = m.lvl * 8 + Math.floor(Math.random() * (m.lvl * 6 + 5));
+  p.gold += gold;
+  const got = [];
+  for (const [id, chance] of MOB_LOOT[m.type] || []) {
+    if (Math.random() < chance) {
+      if (I.giveItem(p.inv, id, 1) === 0) got.push(id);
+      else sendTo(p, { t: 'notice', msg: 'Çantan dolu! Ganimet alınamadı.' });
+    }
+  }
+  sendTo(p, { t: 'loot', gold, items: got });
+  if (got.length) { sendInv(p); saveInv(p); }
+  else sendTo(p, { t: 'gold', gold: p.gold });
+}
+
+function sendInv(p) {
+  sendTo(p, {
+    t: 'inv', gold: p.gold,
+    items: p.inv.map((i) => ({ c: i.container, s: i.slot, id: i.itemId, n: i.count, p: i.plus, a: i.attrs.filter((a) => a.type).map((a) => [a.type, a.value]) })),
+  });
+}
+
+// Envanter kayıtları sırayla yapılır (bir önceki bitmeden sonraki başlamaz → eski veri yeniyi ezmez)
+function saveInv(p) {
+  const snapshot = p.inv.map((i) => ({ ...i, attrs: i.attrs.map((a) => ({ ...a })) }));
+  p.saveChain = (p.saveChain || Promise.resolve())
+    .then(() => db.saveInventory(p.charId, snapshot))
+    .catch((e) => console.error('Envanter kayıt hatası:', e.message));
+  return p.saveChain;
+}
+
+function itemChanged(p) {
+  recalcStats(p);
+  sendInv(p);
+  saveInv(p);
+}
+
+const nearSmith = (p) => MAP.smiths.some((s) => dist(p, s) <= SMITH_RANGE);
+const slotArg = (v, max) => Number.isInteger(v) && v >= 0 && v < max;
+
+const ITEM_HANDLERS = {
+  // çantadaki eşyayı kuşan (yuvada eşya varsa yer değiştirir)
+  equip(p, m) {
+    if (!slotArg(m.slot, I.BAG_SIZE)) return p.monitor.flag('invalidAction', 'equip');
+    const it = I.find(p.inv, I.BAG, m.slot);
+    if (!it || !I.isEquip(it.itemId)) return;
+    const T = I.ITEMS[it.itemId];
+    if (T.cls && T.cls !== p.cls) return sendTo(p, { t: 'notice', msg: `Bu eşyayı sadece ${CLASSES[T.cls].name} kullanabilir.` });
+    const es = I.EQUIP_SLOT[T.kind];
+    const old = I.find(p.inv, I.EQUIP, es);
+    if (old) { old.container = I.BAG; old.slot = it.slot; }
+    it.container = I.EQUIP; it.slot = es;
+    itemChanged(p);
+  },
+
+  unequip(p, m) {
+    if (!slotArg(m.slot, 3)) return p.monitor.flag('invalidAction', 'unequip');
+    const it = I.find(p.inv, I.EQUIP, m.slot);
+    if (!it) return;
+    const free = I.freeSlot(p.inv);
+    if (free < 0) return sendTo(p, { t: 'notice', msg: 'Çantan dolu.' });
+    it.container = I.BAG; it.slot = free;
+    itemChanged(p);
+  },
+
+  // demircide yükseltme: protect 0 = standart, 1 = Kutsama Parşömeni, 2 = Büyülü Metal
+  upgrade(p, m) {
+    if (p.dead) return;
+    if (!nearSmith(p)) return sendTo(p, { t: 'upRes', error: 'Yükseltme için köydeki demirciye gitmelisin.' });
+    if (![0, 1].includes(m.c) || !slotArg(m.slot, I.BAG_SIZE) || ![0, 1, 2].includes(m.protect)) return p.monitor.flag('invalidAction', 'upgrade');
+    const it = I.find(p.inv, m.c, m.slot);
+    if (!it) return sendTo(p, { t: 'upRes', error: 'Eşya bulunamadı.' });
+    const name = I.ITEMS[it.itemId].name;
+    const res = I.upgrade(p.inv, p.gold, it, m.protect);
+    if (res.error) return sendTo(p, { t: 'upRes', error: res.error });
+    p.gold -= res.cost;
+    itemChanged(p);
+    saveChar(p);
+    sendTo(p, { t: 'upRes', outcome: res.outcome, from: res.from, to: res.to, name, c: m.c, slot: m.slot });
+    if (res.outcome === 'success' && res.to >= 7) events.push({ t: 'sys', msg: `${p.n}, ${name} eşyasını +${res.to} yaptı!` });
+  },
+
+  // Efsun Taşı: yeni efsun ekle
+  addBonus(p, m) {
+    if (![0, 1].includes(m.c) || !slotArg(m.slot, I.BAG_SIZE)) return p.monitor.flag('invalidAction', 'addBonus');
+    const it = I.find(p.inv, m.c, m.slot);
+    if (!it || !I.isEquip(it.itemId)) return;
+    if (I.bonusCount(it) >= I.MAX_BASIC_BONUS) return sendTo(p, { t: 'bonusRes', error: 'Bu eşyada zaten 5 efsun var.' });
+    if (!I.takeItem(p.inv, 5001, 1)) return sendTo(p, { t: 'bonusRes', error: 'Efsun Taşın yok.' });
+    const res = I.addBonus(it);
+    itemChanged(p);
+    sendTo(p, { t: 'bonusRes', ok: res.ok, kind: 'add', c: it.container, slot: it.slot });
+  },
+
+  // Değişim Tozu: efsunları yeniden çek
+  rerollBonus(p, m) {
+    if (![0, 1].includes(m.c) || !slotArg(m.slot, I.BAG_SIZE)) return p.monitor.flag('invalidAction', 'rerollBonus');
+    const it = I.find(p.inv, m.c, m.slot);
+    if (!it || !I.isEquip(it.itemId)) return;
+    if (I.bonusCount(it) === 0) return sendTo(p, { t: 'bonusRes', error: 'Önce Efsun Taşı ile efsun eklemelisin.' });
+    if (!I.takeItem(p.inv, 5002, 1)) return sendTo(p, { t: 'bonusRes', error: 'Değişim Tozun yok.' });
+    I.rerollBonus(it);
+    itemChanged(p);
+    sendTo(p, { t: 'bonusRes', ok: true, kind: 'reroll', c: it.container, slot: it.slot });
+  },
+};
 
 // ---------------- HESAP SİSTEMİ ----------------
 const USER_RE = /^[a-zA-Z0-9_]{3,16}$/;
@@ -1015,6 +1170,9 @@ const handlers = {
       input: { up: false, down: false, left: false, right: false, atk: false, angle: 0 },
       ...pos,
     };
+    me.inv = await db.getInventory(c.id);
+    me.saveChain = Promise.resolve();
+    if (me.inv.length === 0) giveStarterKit(me);
     recalcStats(me);
     me.hp = me.mh;
     me.mp = me.mm;
@@ -1031,7 +1189,16 @@ const handlers = {
     for (const [k, f] of Object.entries(FACTIONS)) factionInfo[k] = { name: f.name, short: f.short, color: f.color };
     const mobInfo = {};
     for (const [k, t] of Object.entries(MOB_TYPES)) mobInfo[k] = { name: t.name, color: t.color, r: t.r, aggro: t.aggro, shape: t.shape };
-    conn.send({ t: 'welcome', id: me.id, map: MAP, classes: classInfo, factions: factionInfo, mobTypes: mobInfo, me: { f: me.f, cls: me.cls } });
+    const itemInfo = {};
+    for (const [id, t] of Object.entries(I.ITEMS)) itemInfo[id] = { name: t.name, kind: t.kind, cls: t.cls, atk: t.atk, def: t.def, hp: t.hp, desc: t.desc, stack: t.stack || 1 };
+    const bonusInfo = {};
+    for (const [id, b] of Object.entries(I.BONUSES)) bonusInfo[id] = { name: b.name, pct: b.pct };
+    conn.send({
+      t: 'welcome', id: me.id, map: MAP, classes: classInfo, factions: factionInfo, mobTypes: mobInfo, me: { f: me.f, cls: me.cls },
+      items: itemInfo, bonuses: bonusInfo, plusMul: I.PLUS_MUL,
+      upgrade: I.UPGRADE.map((u) => ({ chance: u.chance, gold: u.gold, mat: u.mat || null })),
+    });
+    sendInv(me);
     events.push({ t: 'sys', msg: `${me.n} oyuna katıldı (${FACTIONS[me.f].short} · ${CLASSES[me.cls].name})` });
   },
 
@@ -1048,6 +1215,7 @@ function removePlayer(p) {
   players.delete(p.id);
   grid.remove(p);
   saveChar(p);
+  saveInv(p);
   events.push({ t: 'sys', msg: `${p.n} oyundan ayrıldı` });
 }
 
@@ -1110,6 +1278,10 @@ wss.on('connection', (ws) => {
         if (!me.dead && SKILL_KEYS.includes(m.k)) useSkill(me, m.k);
         return;
       }
+      if (ITEM_HANDLERS[m.t]) {
+        ITEM_HANDLERS[m.t](me, m);
+        return;
+      }
       if (m.t === 'chat') {
         const msg = String(m.msg || '').trim().slice(0, 120);
         if (msg) events.push({ t: 'chat', n: me.n, f: me.f, msg });
@@ -1132,7 +1304,7 @@ wss.on('connection', (ws) => {
 });
 
 function shutdown() {
-  Promise.all([...players.values()].map(saveChar)).finally(() => process.exit(0));
+  Promise.all([...players.values()].flatMap((p) => [saveChar(p), saveInv(p)])).finally(() => process.exit(0));
   setTimeout(() => process.exit(0), 3000);
 }
 process.on('SIGTERM', shutdown);
