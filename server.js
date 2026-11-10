@@ -1,5 +1,5 @@
-// PvP Server - çok oyunculu PvP sunucusu
-// Sunucu her şeyi kendisi hesaplar (hile koruması): istemci sadece tuşları gönderir.
+// PvP Server - yetkili (authoritative) oyun sunucusu
+// Bütün oyun kuralları burada hesaplanır; istemci sadece tuş bilgisi gönderir.
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -7,12 +7,20 @@ const crypto = require('crypto');
 const { promisify } = require('util');
 const { WebSocketServer } = require('ws');
 const db = require('./db');
+const { SpatialGrid } = require('./aoi');
+const { ActionGate, CheatMonitor, auditMove } = require('./anticheat');
 
 const scrypt = promisify(crypto.scrypt);
 const PORT = process.env.PORT || 3000;
-const TICK = 30; // saniyede 30 güncelleme
+const TICK = 30; // simülasyon: saniyede 30 adım
 const DT = 1 / TICK;
+const SEND_EVERY = 2; // ağ: her 2 adımda bir gönder (saniyede 15 paket)
 const MAX_CHARS = 3;
+
+// Görüş alanı: oyuncuya sadece bu yarıçaptaki varlıklar gönderilir (20 px = 1 metre → 55 m).
+const VIEW_R = 1100;
+const CELL = 256;
+const grid = new SpatialGrid(CELL);
 
 // ---------------- KRALLIKLAR ----------------
 const FACTIONS = {
@@ -24,6 +32,7 @@ const FACTIONS = {
 // ---------------- HARİTA ----------------
 const VILLAGE_R = 230;
 const MAP = {
+  id: 1,
   w: 3000,
   h: 2400,
   villages: Object.entries(FACTIONS).map(([f, d]) => ({ f, x: d.village.x, y: d.village.y, r: VILLAGE_R })),
@@ -40,30 +49,31 @@ const MAP = {
 // ---------------- SINIFLAR ----------------
 const CLASSES = {
   savasci: {
-    name: 'Savaşçı', hp: 220, mp: 80, speed: 185, color: '#d9534f',
+    name: 'Savaşçı', hp: 220, mp: 80, speed: 185, color: '#d9534f', stats: { str: 8, dex: 4, int: 2, vit: 6 },
     atk: { type: 'melee', range: 78, arc: 1.5, dmg: 20, cd: 0.6 },
     q: { name: 'Hamle', mp: 25, cd: 5 },
     e: { name: 'Demir Kalkan', mp: 30, cd: 12 },
   },
   golge: {
-    name: 'Gölge Avcı', hp: 150, mp: 90, speed: 225, color: '#9b59b6',
+    name: 'Gölge Avcı', hp: 150, mp: 90, speed: 225, color: '#9b59b6', stats: { str: 5, dex: 9, int: 2, vit: 4 },
     atk: { type: 'melee', range: 64, arc: 1.2, dmg: 13, cd: 0.35 },
     q: { name: 'Zehirli Hançer', mp: 20, cd: 4 },
     e: { name: 'Gölge Örtüsü', mp: 35, cd: 14 },
   },
   buyucu: {
-    name: 'Ruh Büyücüsü', hp: 130, mp: 140, speed: 180, color: '#3498db',
+    name: 'Ruh Büyücüsü', hp: 130, mp: 140, speed: 180, color: '#3498db', stats: { str: 2, dex: 4, int: 9, vit: 5 },
     atk: { type: 'proj', dmg: 15, cd: 0.55 },
     q: { name: 'Alev Küresi', mp: 35, cd: 6 },
     e: { name: 'Şifa Işığı', mp: 40, cd: 10 },
   },
 };
+const DASH_SPEED = 1100;
 
 const MAX_LEVEL = 30;
 const PLAYER_R = 20;
 const RESPAWN = 5;
 
-const players = new Map(); // id -> oyuncu (oyunda olan karakterler)
+const players = new Map(); // id -> oyuncu (oyundaki karakterler)
 const projectiles = [];
 const dummies = [];
 let events = [];
@@ -76,7 +86,9 @@ const dummySpots = [
   [1300, 1700], [1500, 1660], [1700, 1700], // Yeşim Turna köyü yanı
 ];
 dummySpots.forEach(([x, y], i) => {
-  dummies.push({ id: 'd' + i, dummy: true, n: 'Antrenman Kuklası', x, y, hp: 300, mh: 300, dead: false, respawnAt: 0, lvl: 1 });
+  const d = { id: 'd' + i, dummy: true, n: 'Antrenman Kuklası', x, y, hp: 300, mh: 300, dead: false, respawnAt: 0, lvl: 1 };
+  dummies.push(d);
+  grid.insert(d);
 });
 
 // ---------------- YARDIMCILAR ----------------
@@ -86,6 +98,7 @@ const inSafe = (o) => MAP.villages.some((v) => dist(o, v) < v.r);
 const scale = (p) => 1 + 0.1 * (p.lvl - 1);
 const dmgMul = (p) => 1 + 0.08 * (p.lvl - 1);
 const xpNeed = (lvl) => 100 * lvl;
+const inRock = (o, r) => MAP.rocks.some((k) => dist(o, k) < k.r + r);
 
 function spawnPoint(faction) {
   const v = FACTIONS[faction].village;
@@ -107,11 +120,9 @@ function resolveCollisions(o, r) {
   o.y = clamp(o.y, r, MAP.h - r);
 }
 
-function allTargets() {
-  const list = [];
-  for (const p of players.values()) if (!p.dead) list.push(p);
-  for (const d of dummies) if (!d.dead) list.push(d);
-  return list;
+// Izgarayı kullanarak sadece yakındaki canlı hedefleri getirir.
+function targetsNear(x, y, r) {
+  return grid.query(x, y, r + PLAYER_R, (e) => !e.dead);
 }
 
 // Aynı krallıktan oyuncular birbirine vuramaz.
@@ -174,10 +185,11 @@ function gainXp(p, amount) {
   while (p.xp >= xpNeed(p.lvl) && p.lvl < MAX_LEVEL) {
     p.xp -= xpNeed(p.lvl);
     p.lvl++;
+    p.statPoints += 3;
     recalcStats(p);
     p.hp = p.mh;
     p.mp = p.mm;
-    events.push({ t: 'lvl', id: p.id, l: p.lvl, n: p.n });
+    events.push({ t: 'lvl', id: p.id, l: p.lvl, n: p.n, x: Math.round(p.x), y: Math.round(p.y) });
     saveChar(p);
   }
   if (p.lvl >= MAX_LEVEL) p.xp = 0;
@@ -196,16 +208,15 @@ function shoot(p, kind, dmg, speed, range, r) {
 
 function basicAttack(p) {
   const c = CLASSES[p.cls];
-  if (p.cd.atk > now) return;
-  p.cd.atk = now + c.atk.cd;
+  // saldırı hızı tamamen sunucu saatine bağlı: istemci ne kadar hızlı tıklarsa tıklasın değişmez
+  if (!p.gate.tryUse('atk', now, c.atk.cd)) return;
   breakInvis(p);
   const dmg = c.atk.dmg * dmgMul(p);
   if (c.atk.type === 'melee') {
-    events.push({ t: 'swing', id: p.id, a: +p.angle.toFixed(2), r: c.atk.range });
-    for (const t of allTargets()) {
+    events.push({ t: 'swing', id: p.id, a: +p.angle.toFixed(2), r: c.atk.range, x: Math.round(p.x), y: Math.round(p.y) });
+    for (const t of targetsNear(p.x, p.y, c.atk.range)) {
       if (!canHurt(p, t)) continue;
-      const d = dist(p, t);
-      if (d > c.atk.range + PLAYER_R) continue;
+      if (dist(p, t) > c.atk.range + PLAYER_R) continue;
       let diff = Math.atan2(t.y - p.y, t.x - p.x) - p.angle;
       diff = Math.atan2(Math.sin(diff), Math.cos(diff));
       if (Math.abs(diff) <= c.atk.arc / 2) dealDamage(p, t, dmg);
@@ -218,14 +229,14 @@ function basicAttack(p) {
 function useSkill(p, key) {
   const c = CLASSES[p.cls];
   const s = c[key];
-  if (!s || p.cd[key] > now || p.mp < s.mp) return;
-  p.cd[key] = now + s.cd;
+  if (!s || p.mp < s.mp) return;
+  if (!p.gate.tryUse(key, now, s.cd)) return;
   p.mp -= s.mp;
   const m = dmgMul(p);
 
   if (p.cls === 'savasci' && key === 'q') {
     breakInvis(p);
-    p.dash = { until: now + 0.2, vx: Math.cos(p.angle) * 1100, vy: Math.sin(p.angle) * 1100, hit: new Set(), dmg: 32 * m };
+    p.dash = { until: now + 0.2, vx: Math.cos(p.angle) * DASH_SPEED, vy: Math.sin(p.angle) * DASH_SPEED, hit: new Set(), dmg: 32 * m };
   } else if (p.cls === 'savasci' && key === 'e') {
     p.shieldUntil = now + 4;
   } else if (p.cls === 'golge' && key === 'q') {
@@ -243,7 +254,7 @@ function useSkill(p, key) {
 
 function explode(pr, owner) {
   events.push({ t: 'boom', x: Math.round(pr.x), y: Math.round(pr.y) });
-  for (const t of allTargets()) {
+  for (const t of targetsNear(pr.x, pr.y, 95)) {
     if (t.id === pr.owner) continue;
     if (dist(pr, t) < 95) dealDamage(owner, t, pr.dmg);
   }
@@ -254,9 +265,11 @@ function update() {
   now += DT;
 
   for (const p of players.values()) {
+    p.playTime += DT;
     if (p.dead) {
       if (now >= p.respawnAt) {
         Object.assign(p, spawnPoint(p.f), { dead: false, hp: p.mh, mp: p.mm });
+        grid.update(p);
         sendTo(p, { t: 'respawn' });
       }
       continue;
@@ -264,11 +277,14 @@ function update() {
     const c = CLASSES[p.cls];
     const inp = p.input;
     p.angle = inp.angle;
+    const px = p.x, py = p.y;
+    let maxSpeed = c.speed;
 
     if (p.dash && p.dash.until > now) {
+      maxSpeed = DASH_SPEED;
       p.x += p.dash.vx * DT;
       p.y += p.dash.vy * DT;
-      for (const t of allTargets()) {
+      for (const t of targetsNear(p.x, p.y, PLAYER_R + 10)) {
         if (!canHurt(p, t) || p.dash.hit.has(t.id)) continue;
         if (dist(p, t) < PLAYER_R * 2 + 10) {
           p.dash.hit.add(t.id);
@@ -286,6 +302,8 @@ function update() {
       }
     }
     resolveCollisions(p, PLAYER_R);
+    if (!auditMove(p, px, py, DT, maxSpeed)) p.monitor && p.monitor.flag('speed', `${Math.round(dist({ x: px, y: py }, p))}px/tick`);
+    grid.update(p);
 
     if (inp.atk) basicAttack(p);
 
@@ -315,10 +333,9 @@ function update() {
     pr.y += pr.vy * DT;
     pr.left -= Math.hypot(pr.vx, pr.vy) * DT;
     const owner = players.get(pr.owner);
-    let done = pr.left <= 0 || pr.x < 0 || pr.y < 0 || pr.x > MAP.w || pr.y > MAP.h;
-    if (!done && MAP.rocks.some((r) => dist(pr, r) < r.r + pr.r)) done = true;
+    let done = pr.left <= 0 || pr.x < 0 || pr.y < 0 || pr.x > MAP.w || pr.y > MAP.h || inRock(pr, pr.r);
     if (!done) {
-      for (const t of allTargets()) {
+      for (const t of targetsNear(pr.x, pr.y, pr.r)) {
         if (t.id === pr.owner) continue;
         if (owner && !canHurt(owner, t)) continue; // dost oyuncunun içinden geçer
         if (dist(pr, t) < PLAYER_R + pr.r) {
@@ -343,7 +360,7 @@ function update() {
     else if (!d.dead) d.hp = Math.min(d.mh, d.hp + 10 * DT);
   }
 
-  broadcast();
+  if (++tickCount % SEND_EVERY === 0) broadcast();
 }
 
 // ---------------- AĞ ----------------
@@ -353,41 +370,53 @@ function sendTo(p, msg) {
 }
 
 let tickCount = 0;
+let lastBoard = null;
 function broadcast() {
-  tickCount++;
-  const projData = projectiles.map((p) => [Math.round(p.x), Math.round(p.y), p.kind]);
-  const dumData = dummies.map((d) => ({ id: d.id, x: d.x, y: d.y, hp: Math.round(d.hp), mh: d.mh, dead: d.dead }));
-  let board = null;
-  if (tickCount % 15 === 0) {
-    board = [...players.values()]
+  const evs = events;
+  events = [];
+  // olayları ikiye ayır: konumlu olanlar (sadece yakındakilere) ve genel olanlar (herkese)
+  const localEv = evs.filter((e) => e.x !== undefined);
+  const globalEv = evs.filter((e) => e.x === undefined);
+
+  if (tickCount % 30 === 0) {
+    lastBoard = [...players.values()]
       .sort((a, b) => b.kills - a.kills || b.lvl - a.lvl)
       .slice(0, 5)
       .map((p) => ({ n: p.n, k: p.kills, d: p.deaths, l: p.lvl, f: p.f }));
   }
-  const evs = events;
-  events = [];
-  const pub = (p) => ({
-    id: p.id, n: p.n, c: p.cls, f: p.f, x: Math.round(p.x), y: Math.round(p.y), a: +p.angle.toFixed(2),
-    hp: Math.round(p.hp), mh: p.mh, l: p.lvl, dead: p.dead, sh: p.shieldUntil > now,
-    iv: p.invisUntil > now, ps: !!p.poison,
-  });
-  const pubList = [...players.values()].map((p) => [p, pub(p)]);
 
   for (const me of players.values()) {
-    // görünmez oyuncular sadece kendine ve kendi krallığına görünür
-    const list = pubList.filter(([p]) => p === me || p.f === me.f || !(p.invisUntil > now)).map(([, d]) => d);
+    const vx = me.x, vy = me.y, r2 = VIEW_R * VIEW_R;
+    const near = (o) => (o.x - vx) ** 2 + (o.y - vy) ** 2 <= r2;
+    const vis = grid.query(vx, vy, VIEW_R);
+    const plist = [];
+    const dlist = [];
+    for (const e of vis) {
+      if (e.dummy) {
+        dlist.push({ id: e.id, x: e.x, y: e.y, hp: Math.round(e.hp), mh: e.mh, dead: e.dead });
+      } else if (e === me || e.f === me.f || !(e.invisUntil > now)) {
+        // görünmez düşmanların konumu hiç gönderilmez (istemcide gizlemek yetmez: hile ile görülebilir)
+        plist.push({
+          id: e.id, n: e.n, c: e.cls, f: e.f, x: Math.round(e.x), y: Math.round(e.y), a: +e.angle.toFixed(2),
+          hp: Math.round(e.hp), mh: e.mh, l: e.lvl, dead: e.dead, sh: e.shieldUntil > now,
+          iv: e.invisUntil > now, ps: !!e.poison,
+        });
+      }
+    }
     const msg = {
-      t: 'state', players: list, proj: projData, dummies: dumData, ev: evs,
+      t: 'state',
+      players: plist,
+      dummies: dlist,
+      proj: projectiles.filter(near).map((p) => [Math.round(p.x), Math.round(p.y), p.kind]),
+      ev: globalEv.concat(localEv.filter(near)),
       me: {
         mp: Math.round(me.mp), mm: me.mm, xp: me.xp, xpn: xpNeed(me.lvl), k: me.kills, d: me.deaths,
-        cd: {
-          atk: Math.max(0, me.cd.atk - now), q: Math.max(0, me.cd.q - now), e: Math.max(0, me.cd.e - now),
-        },
+        cd: { atk: me.gate.remaining('atk', now), q: me.gate.remaining('q', now), e: me.gate.remaining('e', now) },
         safe: inSafe(me),
       },
       online: players.size,
     };
-    if (board) msg.board = board;
+    if (tickCount % 30 === 0) msg.board = lastBoard;
     sendTo(me, msg);
   }
 }
@@ -401,48 +430,36 @@ async function hashPass(pass, salt) {
 }
 
 function charSummary(c) {
-  return { id: c.id, name: c.name, cls: c.cls, f: c.faction, lvl: c.lvl, kills: c.kills };
-}
-
-async function loadChars(acc) {
-  const list = [];
-  for (const id of acc.chars) {
-    const c = await db.get('char:' + id);
-    if (c) list.push(charSummary(c));
-  }
-  return list;
+  return { id: c.id, name: c.name, cls: c.cls, f: c.faction, lvl: c.level, kills: c.kills };
 }
 
 async function newToken(acc) {
   const token = crypto.randomBytes(24).toString('hex');
-  const all = [...(acc.tokens || []), token];
-  const old = all.slice(0, -5); // en fazla 5 cihazda açık oturum
-  acc.tokens = all.slice(-5);
-  await db.set('tok:' + token, acc.user.toLowerCase());
-  await db.set('acc:' + acc.user.toLowerCase(), acc);
-  for (const t of old) await db.del('tok:' + t);
+  await db.createSession(acc.id, token);
   return token;
 }
 
 async function sendAccount(conn, token) {
-  conn.send({
-    t: 'account', user: conn.acc.user, faction: conn.acc.faction, token,
-    chars: await loadChars(conn.acc), max: MAX_CHARS,
-  });
+  const acc = await db.getAccount(conn.acc.id); // güncel krallık bilgisi için
+  conn.acc = acc;
+  const chars = await db.listCharacters(acc.id);
+  conn.send({ t: 'account', user: acc.username, faction: acc.faction, token, chars: chars.map(charSummary), max: MAX_CHARS });
 }
 
 function saveChar(p) {
   p.dirty = false;
-  return db.set('char:' + p.charId, {
-    id: p.charId, owner: p.owner, name: p.n, cls: p.cls, faction: p.f,
-    lvl: p.lvl, xp: p.xp, kills: p.kills, deaths: p.deaths, created: p.created,
+  return db.saveCharacter({
+    id: p.charId, level: p.lvl, exp: p.xp, alignment: p.alignment, mapId: MAP.id,
+    x: p.dead ? null : Math.round(p.x), y: p.dead ? null : Math.round(p.y), z: 0,
+    str: p.stats.str, dex: p.stats.dex, int: p.stats.int, vit: p.stats.vit, statPoints: p.statPoints,
+    gold: p.gold, kills: p.kills, deaths: p.deaths, playSeconds: Math.round(p.playTime),
   }).catch((e) => console.error('Kayıt hatası:', e.message));
 }
 
-// periyodik kayıt
+// periyodik kayıt (konum dahil)
 setInterval(() => {
-  for (const p of players.values()) if (p.dirty) saveChar(p);
-}, 15000);
+  for (const p of players.values()) saveChar(p);
+}, 30000);
 
 const handlers = {
   async register(conn, m) {
@@ -451,100 +468,102 @@ const handlers = {
     if (!USER_RE.test(user)) return conn.err('Kullanıcı adı 3-16 karakter olmalı (harf, rakam, _).');
     if (pass.length < 6 || pass.length > 64) return conn.err('Şifre en az 6 karakter olmalı.');
     const salt = crypto.randomBytes(16).toString('hex');
-    const acc = { user, salt, hash: await hashPass(pass, salt), faction: null, chars: [], tokens: [], created: Date.now() };
-    if (!(await db.claim('acc:' + user.toLowerCase(), acc))) return conn.err('Bu kullanıcı adı alınmış.');
+    const acc = await db.createAccount(user, await hashPass(pass, salt), salt);
+    if (!acc) return conn.err('Bu kullanıcı adı alınmış.');
     conn.acc = acc;
+    await db.touchLogin(acc.id);
     await sendAccount(conn, await newToken(acc));
   },
 
   async login(conn, m) {
-    if (conn.fails >= 5) return conn.err('Çok fazla hatalı deneme. Biraz bekle.');
+    if (conn.fails >= 5) return conn.err('Çok fazla hatalı deneme. 30 saniye bekle.');
     const user = String(m.user || '');
-    const acc = USER_RE.test(user) ? await db.get('acc:' + user.toLowerCase()) : null;
-    const ok = acc && crypto.timingSafeEqual(Buffer.from(await hashPass(String(m.pass || ''), acc.salt), 'hex'), Buffer.from(acc.hash, 'hex'));
+    const acc = USER_RE.test(user) ? await db.getAccountByName(user) : null;
+    const hash = await hashPass(String(m.pass || ''), acc ? acc.salt : 'x'); // hesap yoksa da aynı süre harca
+    const ok = acc && crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(acc.hash, 'hex'));
     if (!ok) {
-      conn.fails = (conn.fails || 0) + 1;
+      conn.fails++;
       if (conn.fails >= 5) setTimeout(() => { conn.fails = 0; }, 30000);
+      if (acc) db.logSecurity(acc.id, null, 'loginFail', null).catch(() => {});
       return conn.err('Kullanıcı adı veya şifre yanlış.');
     }
+    if (acc.status === 1) return conn.err('Bu hesap engellenmiş.');
     conn.acc = acc;
+    await db.touchLogin(acc.id);
     await sendAccount(conn, await newToken(acc));
   },
 
   async token(conn, m) {
-    const userKey = await db.get('tok:' + String(m.token || '').slice(0, 64));
-    const acc = userKey && (await db.get('acc:' + userKey));
-    if (!acc || !(acc.tokens || []).includes(m.token)) return conn.send({ t: 'tokenBad' });
+    const accountId = await db.getSessionAccount(String(m.token || '').slice(0, 64));
+    const acc = accountId && (await db.getAccount(accountId));
+    if (!acc || acc.status === 1) return conn.send({ t: 'tokenBad' });
     conn.acc = acc;
+    await db.touchLogin(acc.id);
     await sendAccount(conn, m.token);
   },
 
   async logout(conn, m) {
     if (!conn.acc) return;
-    const t = String(m.token || '');
-    conn.acc.tokens = (conn.acc.tokens || []).filter((x) => x !== t);
-    await db.set('acc:' + conn.acc.user.toLowerCase(), conn.acc);
-    await db.del('tok:' + t);
+    await db.deleteSession(String(m.token || ''));
     conn.acc = null;
   },
 
   async create(conn, m) {
     const acc = conn.acc;
     if (!acc || conn.me) return;
-    acc.chars = acc.chars || [];
-    if (acc.chars.length >= MAX_CHARS) return conn.err(`En fazla ${MAX_CHARS} karakter açabilirsin.`);
+    if ((await db.countCharacters(acc.id)) >= MAX_CHARS) return conn.err(`En fazla ${MAX_CHARS} karakter açabilirsin.`);
     const name = String(m.name || '').trim();
     if (!NAME_RE.test(name)) return conn.err('Karakter adı 3-14 karakter olmalı (harf, rakam, _).');
-    if (!CLASSES[m.cls]) return conn.err('Geçersiz sınıf.');
-    const faction = acc.faction || m.faction;
+    const cls = CLASSES[m.cls];
+    if (!cls) return conn.err('Geçersiz sınıf.');
+    const faction = acc.faction || m.faction; // hesabın krallığı ilk karakterde belirlenir
     if (!FACTIONS[faction]) return conn.err('Bir krallık seç.');
-    const id = crypto.randomBytes(8).toString('hex');
-    if (!(await db.claim('name:' + name.toLowerCase(), id))) return conn.err('Bu karakter adı alınmış.');
-    const c = { id, owner: acc.user.toLowerCase(), name, cls: m.cls, faction, lvl: 1, xp: 0, kills: 0, deaths: 0, created: Date.now() };
-    await db.set('char:' + id, c);
-    acc.faction = faction; // hesabın krallığı ilk karakterde belirlenir
-    acc.chars.push(id);
-    await db.set('acc:' + acc.user.toLowerCase(), acc);
+    const c = await db.createCharacter(acc.id, { name, cls: m.cls, faction, ...cls.stats });
+    if (!c) return conn.err('Bu karakter adı alınmış.');
+    if (!acc.faction) await db.setFaction(acc.id, faction);
     await sendAccount(conn);
   },
 
   async remove(conn, m) {
     const acc = conn.acc;
-    if (!acc || conn.me || !acc.chars.includes(m.id)) return;
-    const c = await db.get('char:' + m.id);
-    if ([...players.values()].some((p) => p.charId === m.id)) return conn.err('Bu karakter şu an oyunda.');
-    acc.chars = acc.chars.filter((x) => x !== m.id);
-    if (acc.chars.length === 0) acc.faction = null; // hiç karakter kalmazsa krallık yeniden seçilebilir
-    await db.set('acc:' + acc.user.toLowerCase(), acc);
-    if (c) { await db.del('char:' + m.id); await db.del('name:' + c.name.toLowerCase()); }
+    if (!acc || conn.me) return;
+    const id = String(m.id);
+    if ([...players.values()].some((p) => p.charId === id)) return conn.err('Bu karakter şu an oyunda.');
+    if (!(await db.deleteCharacter(id, acc.id))) return;
+    if ((await db.countCharacters(acc.id)) === 0) await db.setFaction(acc.id, null); // hiç karakter kalmazsa krallık yeniden seçilebilir
     await sendAccount(conn);
   },
 
   async play(conn, m) {
     const acc = conn.acc;
-    if (!acc || conn.me || !acc.chars.includes(m.id)) return;
-    const c = await db.get('char:' + m.id);
-    if (!c) return conn.err('Karakter bulunamadı.');
+    if (!acc || conn.me) return;
+    const c = await db.getCharacter(String(m.id));
+    if (!c || c.accountId !== acc.id) return conn.err('Karakter bulunamadı.');
     // aynı hesap başka yerde oyundaysa onu çıkar
     for (const p of players.values()) {
-      if (p.owner === acc.user.toLowerCase()) {
+      if (p.accountId === acc.id) {
         sendTo(p, { t: 'kicked', msg: 'Hesabına başka bir yerden girildi.' });
         p.ws.close();
         removePlayer(p);
       }
     }
+    // son kaldığı yerden başla (geçerliyse); değilse kendi köyünde
+    const pos = c.x != null && c.y != null && c.mapId === MAP.id && !inRock({ x: c.x, y: c.y }, PLAYER_R)
+      && c.x > 0 && c.y > 0 && c.x < MAP.w && c.y < MAP.h ? { x: c.x, y: c.y } : spawnPoint(c.faction);
     const me = {
-      id: nextId++, ws: conn.ws, charId: c.id, owner: c.owner, n: c.name, cls: c.cls, f: c.faction,
-      lvl: c.lvl, xp: c.xp, kills: c.kills, deaths: c.deaths, created: c.created, streak: 0,
-      angle: 0, dead: false, cd: { atk: 0, q: 0, e: 0 }, shieldUntil: 0, invisUntil: 0, poison: null, dirty: false,
+      id: nextId++, ws: conn.ws, monitor: conn.monitor, charId: c.id, accountId: acc.id, n: c.name, cls: c.cls, f: c.faction,
+      lvl: c.level, xp: c.exp, kills: c.kills, deaths: c.deaths, alignment: c.alignment, gold: c.gold,
+      stats: { str: c.str, dex: c.dex, int: c.int, vit: c.vit }, statPoints: c.statPoints, playTime: c.playSeconds,
+      streak: 0, angle: 0, dead: false, gate: new ActionGate(), shieldUntil: 0, invisUntil: 0, poison: null, dirty: false,
       input: { up: false, down: false, left: false, right: false, atk: false, angle: 0 },
-      ...spawnPoint(c.faction),
+      ...pos,
     };
     recalcStats(me);
     me.hp = me.mh;
     me.mp = me.mm;
     conn.me = me;
     players.set(me.id, me);
+    grid.insert(me);
     const classInfo = {};
     for (const [k, cl] of Object.entries(CLASSES)) {
       classInfo[k] = { name: cl.name, color: cl.color, q: cl.q, e: cl.e, atkCd: cl.atk.cd };
@@ -566,6 +585,7 @@ const handlers = {
 function removePlayer(p) {
   if (!players.has(p.id)) return;
   players.delete(p.id);
+  grid.remove(p);
   saveChar(p);
   events.push({ t: 'sys', msg: `${p.n} oyundan ayrıldı` });
 }
@@ -596,19 +616,33 @@ wss.on('connection', (ws) => {
     send: (msg) => sendTo(ws, msg),
     err: (msg) => sendTo(ws, { t: 'error', msg }),
   };
+  conn.monitor = new CheatMonitor(
+    (kind) => {
+      sendTo(ws, { t: 'kicked', msg: 'Şüpheli davranış nedeniyle bağlantın kesildi.' });
+      console.warn(`Oyuncu atıldı (${kind}):`, conn.acc && conn.acc.username);
+      ws.close();
+    },
+    (kind, detail) => {
+      db.logSecurity(conn.acc && conn.acc.id, conn.me && conn.me.charId, kind, detail ? String(detail) : null).catch(() => {});
+    },
+  );
 
   ws.on('message', async (raw) => {
     let m;
-    try { m = JSON.parse(raw); } catch { return; }
-    if (!m || typeof m !== 'object') return;
+    try { m = JSON.parse(raw); } catch { return conn.monitor.flag('badPacket', 'json'); }
+    if (!m || typeof m !== 'object' || typeof m.t !== 'string') return conn.monitor.flag('badPacket', 'format');
+    if (!conn.monitor.allow(m.t)) { // paket sınırı
+      if (handlers[m.t]) conn.err('Çok hızlı işlem yaptın, birkaç saniye bekle.');
+      return;
+    }
     const me = conn.me;
 
     // oyun içi mesajlar (hızlı yol)
     if (me && players.has(me.id)) {
       if (m.t === 'input') {
         const i = me.input;
-        i.up = !!m.up; i.down = !!m.down; i.left = !!m.left; i.right = !!m.right; i.atk = !!m.atk;
-        if (Number.isFinite(m.angle)) i.angle = m.angle;
+        i.up = m.up === true; i.down = m.down === true; i.left = m.left === true; i.right = m.right === true; i.atk = m.atk === true;
+        if (Number.isFinite(m.angle) && Math.abs(m.angle) <= 7) i.angle = m.angle;
         return;
       }
       if (m.t === 'skill') {
@@ -616,9 +650,6 @@ wss.on('connection', (ws) => {
         return;
       }
       if (m.t === 'chat') {
-        const t = Date.now();
-        if (me.lastChat && t - me.lastChat < 800) return; // spam koruması
-        me.lastChat = t;
         const msg = String(m.msg || '').trim().slice(0, 120);
         if (msg) events.push({ t: 'chat', n: me.n, f: me.f, msg });
         return;
@@ -627,7 +658,8 @@ wss.on('connection', (ws) => {
 
     // hesap işlemleri (sırayla, aynı anda bir tane)
     const h = handlers[m.t];
-    if (!h || conn.busy) return;
+    if (!h) return;
+    if (conn.busy) return;
     conn.busy = true;
     try { await h(conn, m); } catch (e) { console.error(e); conn.err('Sunucu hatası, tekrar dene.'); }
     conn.busy = false;
@@ -638,8 +670,6 @@ wss.on('connection', (ws) => {
   });
 });
 
-setInterval(update, 1000 / TICK);
-
 function shutdown() {
   Promise.all([...players.values()].map(saveChar)).finally(() => process.exit(0));
   setTimeout(() => process.exit(0), 3000);
@@ -647,4 +677,7 @@ function shutdown() {
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
-server.listen(PORT, () => console.log(`PvP Server çalışıyor: http://localhost:${PORT} · veritabanı: ${db.kind}`));
+db.ready.then(() => {
+  setInterval(update, 1000 / TICK);
+  server.listen(PORT, () => console.log(`PvP Server çalışıyor: http://localhost:${PORT} · veritabanı: ${db.kind}`));
+});

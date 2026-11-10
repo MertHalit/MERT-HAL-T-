@@ -27,5 +27,8 @@ bir PostgreSQL veritabanı (örneğin Neon, ücretsiz) aç ve bağlantı adresin
 
 ## Dosyalar
 - `server.js`: oyun sunucusu ve hesap sistemi
-- `db.js`: veritabanı (PostgreSQL veya dosya)
+- `db.js`, `schema.sql`: veritabanı (PostgreSQL veya dosya)
+- `aoi.js`: görüş alanı ızgarası
+- `anticheat.js`: hile koruması
+- `docs/MIMARI.md`: mimari açıklaması
 - `public/`: oyun ekranı

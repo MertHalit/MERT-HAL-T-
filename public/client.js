@@ -219,6 +219,9 @@ function handle(m) {
     if (!myId) return;
     state = m;
     if (m.board) board = m.board;
+    // görüş alanından çıkanları unut
+    const seen = new Set(m.players.map((p) => p.id));
+    for (const id of view.keys()) if (!seen.has(id)) view.delete(id);
     for (const p of m.players) {
       const v = view.get(p.id);
       if (!v || Math.hypot(v.x - p.x, v.y - p.y) > 300) view.set(p.id, { x: p.x, y: p.y });
