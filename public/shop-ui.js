@@ -140,7 +140,7 @@ window.shopUI = (() => {
     for (const p of state.players) {
       if (!p.sp || p.id === myId) continue;
       const v = view.get(p.id) || p;
-      if (Math.abs(wx - v.x) < 75 && wy > v.y - 95 && wy < v.y + 25) { send({ t: 'viewShop', id: p.id }); return true; }
+      if (Math.abs(wx - v.x) < 80 && wy > v.y - 128 && wy < v.y + 15) { send({ t: 'viewShop', id: p.id }); return true; }
     }
     return false;
   }

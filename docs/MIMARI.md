@@ -197,3 +197,15 @@ Oyuncunun seviyesi canavardan 5'ten fazla yüksekse tecrübe yarıya, 10'dan faz
 - Birden fazla oyun sunucusuna geçilirse 3. madde zaten veritabanı düzeyinde kilitleme sağlıyor. Ek olarak eşyanın `uid` sütunu ile `DELETE … WHERE uid = … RETURNING` kontrolü eklenebilir.
 
 Test sonucu: iki alıcı aynı kılıcı aynı anda aldı, yalnızca biri başarılı oldu. Kaybeden para ödemedi, kılıç kopyalanmadı. PostgreSQL'de toplam altın korundu (3 oyuncu × 5000 = 15000).
+
+# Grafikler (`public/gfx.js`)
+
+Bütün görseller kodla çizilir. Dışarıdan hazır çizim, model ya da doku kullanılmaz, yani telif sorunu yoktur ve hepsi oyuna aittir.
+
+- **Zemin:** 512×512 px'lik parçalar halinde bir kez çizilip önbelleğe alınır (en fazla 24 parça). Sabit tohumlu rastgele sayılarla çimen lekeleri, tutamlar, çiçekler, çakıllar, toprak yollar ve köylerde taş döşeli meydanlar oluşturulur. Lekeler komşu hücrelerden de çizildiği için parça sınırlarında kesik görünmez.
+- **Dekor:** Çam ve kiraz ağaçları (rüzgârda hafif sallanır), pagoda çatılı evler (çatı rengi krallık rengi), titreyen fenerler, dalgalanan köy sancakları, gölgeli ve yosunlu kayalar. Oyuncu bir ağacın arkasına geçince yapraklar yarı saydam olur.
+- **Derinlik sıralaması:** Kayalar, ağaçlar, evler, karakterler ve canavarlar her karede y koordinatına göre sıralanıp çizilir (arkadaki önce). İsimler ve can çubukları en son çizilir, hiçbir şeyin arkasında kalmaz.
+- **Karakterler:** Her sınıfın kıyafeti, başlığı ve silahı var: Savaşçı miğfer ve kılıç, Gölge Avcı kapüşon ve hançer, Ruh Kılıcı tepe topuzu ve parlayan pala, Şaman hasır şapka ve asa. Kemer krallık renginde. Yürürken bacaklar ve gövde hareket eder, saldırırken silah yay çizer.
+- **Canavarlar:** Tilki (kabarık kuyruk), kurt, yaban domuzu (dişler, yele), kara ayı (yuvarlak kulaklar) yürüme animasyonlu. Saldırı hazırlığında gözler kırmızıya döner. Dağ Haydudu maskeli insan olarak çizilir.
+- **Efektler:** Vuruş kıvılcımları (kritikte sarı, arkadan vuruşta mor), güçlü vuruşta ve taş kırılınca ekran sarsıntısı, seviye atlamada altın parçacıklar, parlayan mermiler, ekran kenarı gölgelendirmesi (vinyet), kenarlıklı hasar sayıları.
+- **Sunucu tarafı:** Ağaç gövdeleri ve evler gerçek engeldir (`MAP.solids`). Hareket denetimi artık çarpışma itmesinden önce yapılıyor, böylece engelin içinde kalan oyuncu yanlışlıkla hile şüphesiyle atılmaz. Kaydedilmiş konumu bir engelin içinde kalan oyuncu kendi köyünde başlar.

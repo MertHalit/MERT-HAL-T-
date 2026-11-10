@@ -132,7 +132,8 @@ const inSafe = (o) => MAP.villages.some((v) => dist(o, v) < v.r);
 const scale = (p) => 1 + 0.1 * (p.lvl - 1);
 const dmgMul = (p) => 1 + 0.08 * (p.lvl - 1);
 const xpNeed = (lvl) => 100 * lvl;
-const inRock = (o, r) => MAP.rocks.some((k) => dist(o, k) < k.r + r);
+const blocked = (o, r) => MAP.rocks.concat(MAP.solids || []).some((k) => dist(o, k) < k.r + r);
+const inRock = (o, r) => MAP.rocks.some((k) => dist(o, k) < k.r + r) || (MAP.houses || []).some((k) => dist(o, k) < k.r + r);
 const angleDiff = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
 
 function spawnPoint(faction) {
@@ -143,7 +144,7 @@ function spawnPoint(faction) {
 }
 
 function resolveCollisions(o, r) {
-  for (const rock of MAP.rocks.concat(stones.filter((s) => !s.dead))) {
+  for (const rock of MAP.rocks.concat(MAP.solids || [], stones.filter((s) => !s.dead))) {
     const d = dist(o, rock);
     const min = rock.r + r;
     if (d < min && d > 0) {
@@ -533,7 +534,7 @@ function startReturn(m) {
 // ---- Çarpışma: kayalar, harita kenarı ve köyler (canavar köye giremez). Çarpışma normalini döndürür. ----
 function pushOutMob(m) {
   let nx = 0, ny = 0;
-  const obstacles = MAP.rocks.concat(MAP.villages, stones.filter((s) => !s.dead));
+  const obstacles = MAP.rocks.concat(MAP.villages, MAP.solids || [], stones.filter((s) => !s.dead));
   for (const o of obstacles) {
     const d = dist(m, o);
     const min = o.r + m.r;
@@ -593,7 +594,7 @@ function separate(m) {
 function moveToward(m, tx, ty, speed, stopAt = 0) {
   const dx = tx - m.x, dy = ty - m.y;
   const d = Math.hypot(dx, dy);
-  if (d <= stopAt || d < 1) return true;
+  if (d <= stopAt + 0.5 || d < 1) return true;
   const step = Math.min(speed * DT, d - stopAt);
   m.x += (dx / d) * step;
   m.y += (dy / d) * step;
@@ -991,8 +992,9 @@ function update() {
       p.kb.vx *= 0.82; p.kb.vy *= 0.82;
       if (Math.hypot(p.kb.vx, p.kb.vy) < 20) p.kb = null;
     }
-    resolveCollisions(p, PLAYER_R);
+    // hareket denetimi çarpışma itmesinden ÖNCE yapılır (itme sunucunun kendi hesabı, güvenilir)
     if (!auditMove(p, px, py, DT, maxSpeed)) p.monitor && p.monitor.flag('speed', `${Math.round(dist({ x: px, y: py }, p))}px/tick`);
+    resolveCollisions(p, PLAYER_R);
     grid.update(p);
 
     if (inp.atk && !stunned && !p.shop) basicAttack(p);
@@ -1551,7 +1553,7 @@ const handlers = {
       }
     }
     // son kaldığı yerden başla (geçerliyse); değilse kendi köyünde
-    const pos = c.x != null && c.y != null && c.mapId === MAP.id && !inRock({ x: c.x, y: c.y }, PLAYER_R)
+    const pos = c.x != null && c.y != null && c.mapId === MAP.id && !blocked({ x: c.x, y: c.y }, PLAYER_R)
       && c.x > 0 && c.y > 0 && c.x < MAP.w && c.y < MAP.h ? { x: c.x, y: c.y } : spawnPoint(c.faction);
     const me = {
       id: nextId++, ws: conn.ws, monitor: conn.monitor, charId: c.id, accountId: acc.id, n: c.name, cls: c.cls, f: c.faction,
@@ -1710,6 +1712,52 @@ function shutdown() {
 }
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
+
+// ---------------- HARİTA DEKORU (yollar, evler, ağaçlar) ----------------
+// Sabit tohumlu rastgele üretim: her açılışta aynı harita. Ağaç gövdeleri ve evler gerçek engeldir.
+function buildDecor() {
+  let seed = 20261105;
+  const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+  const C = { x: MAP.w / 2, y: MAP.h / 2 };
+  const segDist = (p, x1, y1, x2, y2) => {
+    const dx = x2 - x1, dy = y2 - y1, t = clamp(((p.x - x1) * dx + (p.y - y1) * dy) / (dx * dx + dy * dy), 0, 1);
+    return Math.hypot(p.x - (x1 + t * dx), p.y - (y1 + t * dy));
+  };
+  MAP.roads = MAP.villages.map((v) => [v.x, v.y, C.x, C.y]);
+  const angDiff = (a, b) => Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b)));
+  // her köye 4 ev: yol ve demirci yönünden uzak açılar
+  MAP.houses = [];
+  for (const v of MAP.villages) {
+    const road = Math.atan2(C.y - v.y, C.x - v.x);
+    const smith = MAP.smiths.find((s) => dist(s, v) < v.r);
+    const smithA = Math.atan2(smith.y - v.y, smith.x - v.x);
+    const cand = [];
+    for (let d = 0; d < 360; d += 15) {
+      const a = (d * Math.PI) / 180;
+      if (angDiff(a, road) > 0.8 && angDiff(a, smithA) > 0.6) cand.push(a);
+    }
+    for (let i = 0; i < 4; i++) {
+      const a = cand[Math.floor(((i + 0.5) * cand.length) / 4)];
+      MAP.houses.push({ x: Math.round(v.x + Math.cos(a) * 160), y: Math.round(v.y + Math.sin(a) * 160), r: 34, f: v.f, v: i });
+    }
+  }
+  // ağaçlar
+  MAP.trees = [];
+  for (let i = 0; i < 4000 && MAP.trees.length < 95; i++) {
+    const p = { x: Math.round(60 + rnd() * (MAP.w - 120)), y: Math.round(60 + rnd() * (MAP.h - 120)) };
+    if (MAP.villages.some((v) => dist(p, v) < v.r + 45)) continue;
+    if (MAP.rocks.some((k) => dist(p, k) < k.r + 55)) continue;
+    if (STONE_SITES.some(([x, y]) => Math.hypot(p.x - x, p.y - y) < 130)) continue;
+    if (SPAWN_GROUPS.some(([, x, y]) => Math.hypot(p.x - x, p.y - y) < 150)) continue;
+    if (dummySpots.some(([x, y]) => Math.hypot(p.x - x, p.y - y) < 70)) continue;
+    if (MAP.roads.some(([x1, y1, x2, y2]) => segDist(p, x1, y1, x2, y2) < 60)) continue;
+    if (MAP.trees.some((t) => dist(p, t) < 75)) continue;
+    const nearVillage = MAP.villages.some((v) => dist(p, v) < 650);
+    MAP.trees.push({ x: p.x, y: p.y, k: nearVillage && rnd() < 0.55 ? 'cherry' : 'pine', s: 0.85 + rnd() * 0.4 });
+  }
+  MAP.solids = MAP.trees.map((t) => ({ x: t.x, y: t.y, r: 14 })).concat(MAP.houses.map((h) => ({ x: h.x, y: h.y, r: h.r })));
+}
+buildDecor();
 
 db.ready.then(() => {
   setInterval(update, 1000 / TICK);
