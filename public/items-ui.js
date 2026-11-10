@@ -5,7 +5,10 @@ window.itemsUI = (() => {
   let inv = [], gold = 0;
   let sel = null; // seçili eşya: { c, s }
   let smithSel = null;
-  const BAG = 0, EQUIP = 1, BAG_SIZE = 30;
+  const BAG = 0, EQUIP = 1;
+  // Izgara: 6 sütun × 8 satır; eşyanın 's' değeri sol üst hücresi
+  const COLS = 6, ROWS = 8, BAG_SIZE = COLS * ROWS, GAP = 4;
+  const pitch = () => (window.innerHeight <= 500 ? 44 : 50); // hücre + boşluk (CSS ile aynı olmalı)
   const EQUIP_NAMES = ['Silah', 'Zırh', 'Miğfer'];
   const ICON = { 1001: '⚔️', 1011: '🗡️', 1021: '⚔️', 1031: '🪄', 2001: '🥋', 2101: '⛑️', 3001: '🪨', 3002: '🌙', 3003: '🔶', 4001: '📜', 4002: '🔩', 5001: '💎', 5002: '✨', 6001: '📘' };
   const PROT_NAMES = ['Standart (başarısızlıkta YANAR)', 'Kutsama Parşömeni (1 seviye düşer)', 'Büyülü Metal (seviye korunur)'];
@@ -27,6 +30,139 @@ window.itemsUI = (() => {
     if (text != null) e.textContent = text;
     return e;
   }
+
+  // ---------------- IZGARA YARDIMCILARI (sunucudakinin aynısı; sadece önizleme için) ----------------
+  const sizeOf = (id) => ({ w: (ITEMS[id] && ITEMS[id].w) || 1, h: (ITEMS[id] && ITEMS[id].h) || 1 });
+  function occupancy(ignore) {
+    const g = new Array(BAG_SIZE).fill(null);
+    for (const it of inv) {
+      if (it.c !== BAG || it === ignore) continue;
+      const { w, h } = sizeOf(it.id), c0 = it.s % COLS, r0 = Math.floor(it.s / COLS);
+      for (let r = r0; r < r0 + h; r++) for (let c = c0; c < c0 + w; c++) if (r < ROWS && c < COLS) g[r * COLS + c] = it;
+    }
+    return g;
+  }
+  function canPlace(id, slot, ignore) {
+    if (slot < 0 || slot >= BAG_SIZE) return false;
+    const { w, h } = sizeOf(id), c0 = slot % COLS, r0 = Math.floor(slot / COLS);
+    if (c0 + w > COLS || r0 + h > ROWS) return false;
+    const g = occupancy(ignore);
+    for (let r = r0; r < r0 + h; r++) for (let c = c0; c < c0 + w; c++) if (g[r * COLS + c]) return false;
+    return true;
+  }
+
+  // Çantayı ızgara olarak çiz. opts: { draggable, onClick(it), selected(it), filter(it) }
+  function renderBag(box, opts = {}) {
+    const P = pitch();
+    box.innerHTML = '';
+    box.classList.add('gbag');
+    box.style.width = COLS * P - GAP + 'px';
+    box.style.height = ROWS * P - GAP + 'px';
+    for (let i = 0; i < BAG_SIZE; i++) {
+      const c = el('div', 'gcell');
+      c.dataset.cell = i;
+      Object.assign(c.style, { left: (i % COLS) * P + 'px', top: Math.floor(i / COLS) * P + 'px', width: P - GAP + 'px', height: P - GAP + 'px' });
+      box.appendChild(c);
+    }
+    for (const it of inv) {
+      if (it.c !== BAG || (opts.filter && !opts.filter(it))) continue;
+      const { w, h } = sizeOf(it.id);
+      const d = el('div', 'gitem' + (opts.selected && opts.selected(it) ? ' sel' : ''));
+      Object.assign(d.style, { left: (it.s % COLS) * P + 'px', top: Math.floor(it.s / COLS) * P + 'px', width: w * P - GAP + 'px', height: h * P - GAP + 'px' });
+      const ico = el('span', 'ico', ICON[it.id] || '❔');
+      ico.style.fontSize = Math.round(Math.min(w, h) * P * 0.5 + (h > w ? 6 : 0)) + 'px';
+      d.appendChild(ico);
+      if (it.p) d.appendChild(el('span', 'plus', '+' + it.p));
+      if (it.n > 1) d.appendChild(el('span', 'cnt', it.n));
+      d.title = itemTitle(it);
+      if (opts.draggable) d.addEventListener('pointerdown', (e) => startDrag(e, it, d));
+      else if (opts.onClick) d.onclick = () => opts.onClick(it);
+      box.appendChild(d);
+    }
+  }
+
+  // ---------------- SÜRÜKLE-BIRAK (fare + dokunmatik) ----------------
+  let drag = null;
+  function startDrag(e, it, node) {
+    if (e.button > 0) return;
+    e.preventDefault();
+    const r = node.getBoundingClientRect();
+    drag = { it, node, sx: e.clientX, sy: e.clientY, ox: e.clientX - r.left, oy: e.clientY - r.top, moved: false, ghost: null, target: null };
+  }
+  function clearMarks() { document.querySelectorAll('.gcell.ok, .gcell.bad, .eqslot.ok').forEach((c) => c.classList.remove('ok', 'bad')); }
+  function onDragMove(e) {
+    if (!drag) return;
+    if (!drag.moved) {
+      if (Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 6) return;
+      drag.moved = true;
+      drag.ghost = drag.node.cloneNode(true);
+      drag.ghost.classList.add('ghost');
+      const r = drag.node.getBoundingClientRect();
+      Object.assign(drag.ghost.style, { width: r.width + 'px', height: r.height + 'px' });
+      document.body.appendChild(drag.ghost);
+      drag.node.style.opacity = 0.3;
+    }
+    Object.assign(drag.ghost.style, { left: e.clientX - drag.ox + 'px', top: e.clientY - drag.oy + 'px' });
+    clearMarks();
+    drag.ghost.classList.remove('away');
+    const it = drag.it;
+    const bagR = $('#invBag').getBoundingClientRect();
+    const P = pitch();
+    const under = document.elementFromPoint(e.clientX, e.clientY);
+    const eqEl = under && under.closest && under.closest('[data-eslot]');
+    if (e.clientX >= bagR.left - 10 && e.clientX <= bagR.right + 10 && e.clientY >= bagR.top - 10 && e.clientY <= bagR.bottom + 10) {
+      const col = Math.floor((e.clientX - drag.ox - bagR.left + P / 2) / P);
+      const row = Math.floor((e.clientY - drag.oy - bagR.top + P / 2) / P);
+      const slot = row * COLS + col;
+      const inRange = col >= 0 && row >= 0 && col < COLS && row < ROWS;
+      const onCell = inRange ? occupancy(it)[slot] : null;
+      const stack = onCell && onCell.id === it.id && (ITEMS[it.id].stack || 1) > 1 && it.c === BAG;
+      const valid = inRange && (stack || canPlace(it.id, slot, it.c === BAG ? it : null));
+      drag.target = { type: 'bag', slot, valid };
+      const { w, h } = stack ? sizeOf(onCell.id) : sizeOf(it.id);
+      const base = stack ? onCell.s : slot;
+      for (let r = 0; r < h; r++) for (let c = 0; c < w; c++) {
+        const cc = (base % COLS) + c, rr = Math.floor(base / COLS) + r;
+        if (cc < 0 || rr < 0 || cc >= COLS || rr >= ROWS) continue;
+        const cell = $(`#invBag .gcell[data-cell="${rr * COLS + cc}"]`);
+        if (cell) cell.classList.add(valid ? 'ok' : 'bad');
+      }
+    } else if (eqEl) {
+      const es = Number(eqEl.dataset.eslot);
+      const kind = ITEMS[it.id].kind;
+      const valid = it.c === BAG && ['weapon', 'armor', 'helmet'][es] === kind;
+      drag.target = { type: 'eq', es, valid };
+      if (valid) eqEl.classList.add('ok');
+    } else {
+      const pr = $('#invPanel').getBoundingClientRect();
+      const out = e.clientX < pr.left || e.clientX > pr.right || e.clientY < pr.top || e.clientY > pr.bottom;
+      drag.target = out && it.c === BAG ? { type: 'ground' } : null;
+      if (drag.target) drag.ghost.classList.add('away');
+    }
+  }
+  function onDragEnd() {
+    if (!drag) return;
+    const d = drag;
+    drag = null;
+    clearMarks();
+    if (d.ghost) d.ghost.remove();
+    d.node.style.opacity = '';
+    const it = d.it;
+    if (!d.moved) { sel = { c: it.c, s: it.s }; renderInv(); return; }
+    const t = d.target;
+    if (t && t.type === 'bag' && t.valid) {
+      if (it.c === BAG) send({ t: 'moveItem', from: it.s, to: t.slot });
+      else send({ t: 'unequip', slot: it.s, to: t.slot });
+    } else if (t && t.type === 'eq' && t.valid) {
+      send({ t: 'equip', slot: it.s });
+    } else if (t && t.type === 'ground') {
+      if (confirm(`${itemTitle(it)} yere atılsın mı? (30 saniye boyunca sadece sen alabilirsin)`)) send({ t: 'dropItem', slot: it.s });
+    }
+    renderInv();
+  }
+  addEventListener('pointermove', onDragMove);
+  addEventListener('pointerup', onDragEnd);
+  addEventListener('pointercancel', onDragEnd);
 
   function itemTitle(it) {
     return ITEMS[it.id].name + (isEquip(it.id) && it.p ? ` +${it.p}` : '');
@@ -72,16 +208,14 @@ window.itemsUI = (() => {
     for (let s = 0; s < 3; s++) {
       const it = find(EQUIP, s);
       const wrap = el('div', 'eqslot');
-      wrap.appendChild(cell(it, () => { sel = it ? { c: EQUIP, s } : null; renderInv(); }, sel && sel.c === EQUIP && sel.s === s));
+      wrap.dataset.eslot = s;
+      const c = cell(it, null, sel && sel.c === EQUIP && sel.s === s);
+      if (it) c.addEventListener('pointerdown', (e) => startDrag(e, it, c));
+      wrap.appendChild(c);
       wrap.appendChild(el('small', null, EQUIP_NAMES[s]));
       eq.appendChild(wrap);
     }
-    const bag = $('#invBag');
-    bag.innerHTML = '';
-    for (let s = 0; s < BAG_SIZE; s++) {
-      const it = find(BAG, s);
-      bag.appendChild(cell(it, () => { sel = it ? { c: BAG, s } : null; renderInv(); }, sel && sel.c === BAG && sel.s === s));
-    }
+    renderBag($('#invBag'), { draggable: true, selected: (it) => sel && sel.c === BAG && sel.s === it.s });
     const det = $('#invDetail');
     det.innerHTML = '';
     const it = sel && find(sel.c, sel.s);
@@ -202,6 +336,7 @@ window.itemsUI = (() => {
     if (m.t === 'inv') {
       inv = m.items; gold = m.gold;
       renderInv(); renderSmith();
+      if (window.shopUI) shopUI.onInv();
     } else if (m.t === 'gold') {
       gold = m.gold; renderInv(); renderSmith();
     } else if (m.t === 'loot') {
@@ -290,5 +425,9 @@ window.itemsUI = (() => {
   $('#tSmith').onclick = () => openSmith();
   $('#tInv').addEventListener('touchstart', (e) => { e.preventDefault(); toggleInv(); }, { passive: false });
 
-  return { handle, init, drawWorld, tick, key };
+  return {
+    handle, init, drawWorld, tick, key, renderBag,
+    get inv() { return inv; }, get gold() { return gold; }, get ITEMS() { return ITEMS; },
+    ICON, itemTitle, detailLines, el, btn, fmt,
+  };
 })();

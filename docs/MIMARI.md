@@ -167,3 +167,33 @@ Oyuncunun seviyesi canavardan 5'ten fazla yüksekse tecrübe yarıya, 10'dan faz
 ## Beceri seviyeleri
 - **Beceri Kitabı** okununca seçilen becerinin seviyesi 1 artar (1-20). Her seviye becerinin hasarını ve iyileştirmesini %4 artırır.
 - Seviyeler `skills` tablosuna kaydedilir. Beceri çubuğunda seviye görünür (örn. "Q 2").
+
+# Aşama 6: Izgara Envanter ve Oyuncu Pazarı
+
+## Izgara envanter (`items.js`, `public/items-ui.js`)
+- Çanta **6 × 8** hücre. Eşyanın `slot` değeri sol üst hücresidir (`satır × 6 + sütun`).
+- Boyutlar: Çelik Hançer 1×1, Demir Kılıç ve Ruh Palası 1×2, Ardıç Asası 1×3, Deri Zırh 2×2, miğfer ve malzemeler 1×1.
+- `occupancy()` her hücrenin hangi eşyaya ait olduğunu gösteren matrisi çıkarır. `canPlace()` taşma ve çakışmayı kontrol eder. `freeSlot()` eşyanın sığdığı ilk yeri satır satır arar.
+- Sürükle-bırak (fare ve dokunmatik, Pointer Events):
+  - çanta → çanta: taşıma; aynı tür yığılabilir eşyanın üstüne bırakınca yığma
+  - çanta → ekipman yuvası: kuşanma (eski eşya, yenisinin boşalttığı yere ya da ilk boş yere gider)
+  - ekipman → çanta: istenen hücreye çıkarma
+  - panel dışına: yere atma (30 sn sadece sahibi alabilir)
+- İstemci bırakılacak yeri yeşil/kırmızı gösterir (aynı algoritmanın kopyası). Son kararı sunucu verir.
+- Eski kayıtlarda çakışan eşyalar girişte `normalize()` ile boş yerlere taşınır.
+
+## Oyuncu pazarı (`server.js` PAZAR bölümü, `public/shop-ui.js`)
+- Sadece köyde (güvenli bölge) kurulur. En fazla 8 eşya, eşya başına birim fiyat (1 - 2 milyar altın).
+- Eşyalar `inventory.container = 3` (pazar tezgahı) kabına, `price` sütunuyla taşınır. Çantadan çıktıkları için kullanılamaz, yükseltilemez, yere atılamaz.
+- Pazar açıkken satıcı hareket edemez, saldıramaz, beceri kullanamaz. Başının üstünde tabela görünür.
+- Alıcı tabelaya tıklar, sunucu güncel listeyi gönderir. Liste her satıştan sonra satıcıya ve listeye bakan herkese yeniden gönderilir.
+- Yığın eşyalarda miktar seçilebilir (kısmi alım). Satıcı çıkarsa pazar kapanır, eşyalar çantaya döner. Yer yoksa pazar kabında kalır ve sonraki girişte döner.
+
+## Satın almada yarış durumunun (race condition) önlenmesi
+1. **Tek adımda kontrol + aktarma:** Node.js sunucusu tek iş parçacıklı bir olay döngüsünde çalışır. `buy()` içinde "eşya hâlâ duruyor mu, fiyat aynı mı, altın yetiyor mu, çantada yer var mı" kontrolleri ve eşya/altın aktarımı arada hiç beklemeden (`await` olmadan) yapılır. Aynı anda gelen iki istekten ilki tamamen bitmeden ikincisi başlamaz. İkinci istek eşyayı bulamaz ve "Bu eşya az önce satıldı" yanıtını alır.
+2. **İyimser doğrulama:** Alıcı, ekranda gördüğü eşya kimliğini ve fiyatı isteğe ekler. Sunucudaki değer farklıysa satış reddedilir. Böylece fiyatı son anda değiştirme tuzağı işe yaramaz.
+3. **Veritabanı işlemi:** İki oyuncunun envanteri ve altını `saveTrade()` ile **tek bir transaction** içinde yazılır. Karakter satırları sabit sırayla `SELECT … FOR UPDATE` ile kilitlenir (kilitlenme/deadlock olmaz). Sunucu yazma sırasında çökerse işlemin tamamı geri alınır, eşya kopyalanmaz ya da kaybolmaz.
+4. Her satış `security_log` tablosuna `trade` olarak kaydedilir.
+- Birden fazla oyun sunucusuna geçilirse 3. madde zaten veritabanı düzeyinde kilitleme sağlıyor. Ek olarak eşyanın `uid` sütunu ile `DELETE … WHERE uid = … RETURNING` kontrolü eklenebilir.
+
+Test sonucu: iki alıcı aynı kılıcı aynı anda aldı, yalnızca biri başarılı oldu. Kaybeden para ödemedi, kılıç kopyalanmadı. PostgreSQL'de toplam altın korundu (3 oyuncu × 5000 = 15000).

@@ -44,7 +44,7 @@ const LIMITS = {
 const CATEGORY = {
   input: 'input', skill: 'skill', chat: 'chat',
   register: 'auth', login: 'auth', token: 'auth', create: 'auth', remove: 'auth', play: 'auth', leave: 'auth', logout: 'auth',
-  useItem: 'item', moveItem: 'item', upgrade: 'item', equip: 'item', unequip: 'item', addBonus: 'item', rerollBonus: 'item', pickup: 'item', useBook: 'item',
+  useItem: 'item', moveItem: 'item', upgrade: 'item', equip: 'item', unequip: 'item', addBonus: 'item', rerollBonus: 'item', pickup: 'item', useBook: 'item', dropItem: 'item', openShop: 'auth', closeShop: 'auth', viewShop: 'item', buy: 'item',
 };
 
 // ---------------- 2) Eylem bekleme süresi ----------------

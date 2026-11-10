@@ -13,7 +13,7 @@ const ITEMS = {
   1001: { name: 'Demir Kılıç', kind: 'weapon', cls: 'savasci', atk: 20, w: 1, h: 2 },
   1011: { name: 'Çelik Hançer', kind: 'weapon', cls: 'golge', atk: 18, w: 1, h: 1 },
   1021: { name: 'Ruh Palası', kind: 'weapon', cls: 'buyucu', atk: 19, w: 1, h: 2 },
-  1031: { name: 'Ardıç Asası', kind: 'weapon', cls: 'saman', atk: 17, w: 1, h: 2 },
+  1031: { name: 'Ardıç Asası', kind: 'weapon', cls: 'saman', atk: 17, w: 1, h: 3 },
   2001: { name: 'Deri Zırh', kind: 'armor', def: 10, hp: 30, w: 2, h: 2 },
   2101: { name: 'Demir Miğfer', kind: 'helmet', def: 4, hp: 50, w: 1, h: 1 },
   3001: { name: 'Kara Demir Parçası', kind: 'material', stack: 200, w: 1, h: 1, desc: '+4 → +6 yükseltmede kullanılır' },
@@ -27,8 +27,12 @@ const ITEMS = {
 };
 const EQUIP_KINDS = ['weapon', 'armor', 'helmet'];
 const EQUIP_SLOT = { weapon: 0, armor: 1, helmet: 2 };
-const BAG = 0, EQUIP = 1;
-const BAG_SIZE = 30;
+const BAG = 0, EQUIP = 1, SHOP = 3;
+// Çanta ızgarası: 6 sütun × 8 satır. Bir eşyanın 'slot' değeri sol üst hücresidir (satır * 6 + sütun).
+const COLS = 6, ROWS = 8;
+const BAG_SIZE = COLS * ROWS;
+const SHOP_SIZE = 8;
+const sizeOf = (id) => ({ w: (ITEMS[id] && ITEMS[id].w) || 1, h: (ITEMS[id] && ITEMS[id].h) || 1 });
 const isEquip = (id) => EQUIP_KINDS.includes((ITEMS[id] || {}).kind);
 const stackMax = (id) => (ITEMS[id] && ITEMS[id].stack) || 1;
 
@@ -137,9 +141,73 @@ function rerollBonus(item) {
 const find = (inv, container, slot) => inv.find((i) => i.container === container && i.slot === slot);
 const countOf = (inv, itemId) => inv.filter((i) => i.container === BAG && i.itemId === itemId).reduce((a, i) => a + i.count, 0);
 
-function freeSlot(inv) {
-  for (let s = 0; s < BAG_SIZE; s++) if (!find(inv, BAG, s)) return s;
+// ---------------- IZGARA (MATRİS) ----------------
+// Çantadaki her hücrenin hangi eşyaya ait olduğunu gösteren matris (ignore: hesaba katılmayacak eşya)
+function occupancy(inv, ignore = null) {
+  const grid = new Array(BAG_SIZE).fill(null);
+  for (const it of inv) {
+    if (it.container !== BAG || it === ignore) continue;
+    const { w, h } = sizeOf(it.itemId);
+    const c0 = it.slot % COLS, r0 = Math.floor(it.slot / COLS);
+    for (let r = r0; r < r0 + h; r++) for (let c = c0; c < c0 + w; c++) if (r < ROWS && c < COLS) grid[r * COLS + c] = it;
+  }
+  return grid;
+}
+
+// Eşya, sol üst köşesi 'slot' olacak şekilde yerleşebilir mi? (taşma ve çakışma kontrolü)
+function canPlace(inv, itemId, slot, ignore = null, grid = null) {
+  if (!Number.isInteger(slot) || slot < 0 || slot >= BAG_SIZE) return false;
+  const { w, h } = sizeOf(itemId);
+  const c0 = slot % COLS, r0 = Math.floor(slot / COLS);
+  if (c0 + w > COLS || r0 + h > ROWS) return false;
+  const g = grid || occupancy(inv, ignore);
+  for (let r = r0; r < r0 + h; r++) for (let c = c0; c < c0 + w; c++) if (g[r * COLS + c]) return false;
+  return true;
+}
+
+// Eşyanın sığdığı ilk yer (satır satır tarar), yoksa -1
+function freeSlot(inv, itemId = 0, ignore = null) {
+  const g = occupancy(inv, ignore);
+  for (let s = 0; s < BAG_SIZE; s++) if (canPlace(inv, itemId, s, ignore, g)) return s;
   return -1;
+}
+
+// Hücreye denk gelen eşya (sol üst köşesi o hücre olmasa bile)
+const itemAtCell = (inv, cell) => occupancy(inv)[cell] || null;
+
+// Çakışan / taşan eşyaları boş yerlere taşır (eşya boyutları değişirse eski kayıtlar için)
+function normalize(inv) {
+  let changed = false;
+  const bag = inv.filter((i) => i.container === BAG).sort((a, b) => a.slot - b.slot);
+  const placed = [];
+  for (const it of bag) {
+    const others = inv.filter((i) => i.container !== BAG || placed.includes(i));
+    if (canPlace(others, it.itemId, it.slot)) { placed.push(it); continue; }
+    const s = freeSlot(others, it.itemId);
+    if (s >= 0) { it.slot = s; placed.push(it); } else { it.container = 2; it.slot = inv.filter((i) => i.container === 2).length; } // sığmayan depoya
+    changed = true;
+  }
+  return changed;
+}
+
+// Sürükle-bırak: çanta içinde taşıma veya aynı eşyaların üst üste yığılması
+function moveInBag(inv, it, toSlot) {
+  if (!it || it.container !== BAG) return { error: 'Eşya bulunamadı.' };
+  if (!Number.isInteger(toSlot) || toSlot < 0 || toSlot >= BAG_SIZE) return { error: 'Geçersiz yer.' };
+  const target = itemAtCell(inv, toSlot);
+  // yığma: aynı tür yığılabilir eşyanın üstüne bırakıldı
+  if (target && target !== it && target.itemId === it.itemId && stackMax(it.itemId) > 1) {
+    const room = stackMax(it.itemId) - target.count;
+    if (room <= 0) return { error: 'Yığın dolu.' };
+    const moved = Math.min(room, it.count);
+    target.count += moved;
+    it.count -= moved;
+    if (it.count <= 0) inv.splice(inv.indexOf(it), 1);
+    return { ok: true, stacked: moved };
+  }
+  if (!canPlace(inv, it.itemId, toSlot, it)) return { error: 'Oraya sığmıyor.' };
+  it.slot = toSlot;
+  return { ok: true };
 }
 
 // Çantaya eşya ekle (yığılabilenleri mevcut yığınlara ekler). Sığmayan miktarı döndürür.
@@ -156,7 +224,7 @@ function giveItem(inv, itemId, count = 1, extra = {}) {
     }
   }
   while (count > 0) {
-    const slot = freeSlot(inv);
+    const slot = freeSlot(inv, itemId);
     if (slot < 0) break;
     const add = Math.min(max, count);
     inv.push({ container: BAG, slot, itemId, count: add, plus: extra.plus || 0, attrs: extra.attrs || emptyAttrs() });
@@ -232,7 +300,8 @@ function equipStats(inv) {
 }
 
 module.exports = {
-  ITEMS, BONUSES, UPGRADE, TIER_WEIGHTS, BONUS_POOL, PLUS_MUL, BAG, EQUIP, BAG_SIZE, EQUIP_SLOT, MAX_BASIC_BONUS,
-  isEquip, stackMax, find, countOf, freeSlot, giveItem, takeItem, upgrade, addBonus, rerollBonus, equipStats,
+  ITEMS, BONUSES, UPGRADE, TIER_WEIGHTS, BONUS_POOL, PLUS_MUL, BAG, EQUIP, SHOP, BAG_SIZE, SHOP_SIZE, COLS, ROWS, EQUIP_SLOT, MAX_BASIC_BONUS,
+  isEquip, stackMax, sizeOf, find, countOf, freeSlot, canPlace, occupancy, itemAtCell, normalize, moveInBag,
+  giveItem, takeItem, upgrade, addBonus, rerollBonus, equipStats,
   weightedPick, pickUnique, emptyAttrs, bonusCount,
 };

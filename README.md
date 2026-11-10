@@ -4,6 +4,8 @@ Tarayıcıda, telefonda ve bilgisayarda oynanan çok oyunculu PvP oyunu.
 
 ## Özellikler
 - Hesap sistemi (kayıt / giriş, otomatik giriş), hesap başına 3 karakter
+- Canavarlar, Bozulma Taşları, yere düşen ganimet ve sahiplik
+- Demirci (+0 → +9), efsun sistemi, ızgara envanter (sürükle-bırak), oyuncu pazarı
 - 3 krallık: Kızıl Ejder, Gök Kaplan, Yeşim Turna. Her birinin kendi köyü var, aynı krallıktakiler birbirine vuramaz
 - 4 sınıf (her biri 4 beceri): Savaşçı, Gölge Avcı, Ruh Kılıcı, Şaman
 - Seviye sistemi (30'a kadar), sıralama tablosu, sohbet, mini harita

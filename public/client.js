@@ -224,6 +224,8 @@ function handle(m) {
       el.title = `${s.name} (${s.mp} mana, ${s.cd} sn)\n${s.desc}`;
     }
     if (window.itemsUI) itemsUI.init(m);
+    if (window.shopUI) shopUI.reset();
+    for (const id of ['#shopSetup', '#shopView']) $(id).classList.add('hidden');
     toast(`${FACTIONS[myFaction].name}'na hoş geldin!`);
     addChat('Köyün dışındaki kuklalarla antrenman yap, sonra düşman krallıkları avla!', true);
     addChat('Kendi krallığından oyunculara vuramazsın. Köyler güvenli bölgedir.', true);
@@ -250,6 +252,8 @@ function handle(m) {
   } else if (m.t === 'respawn') {
     deadUntil = 0;
     $('#death').classList.add('hidden');
+  } else if (window.shopUI && shopUI.handle(m)) {
+    // pazar mesajı
   } else if (window.itemsUI) {
     itemsUI.handle(m);
   }
@@ -650,6 +654,15 @@ function drawWorld(cam) {
     ctx.fillStyle = p.id === myId ? '#e8b04a' : fColor(p.f); ctx.fillText(label, v.x, v.y - 40);
     hpBar(v.x, v.y - 34, p.hp / p.mh, ally ? '#4ad04a' : '#e0473c');
     if (p.st) stars(v.x, v.y - 58);
+    if (p.sp) { // pazar tabelası
+      ctx.font = 'bold 12px sans-serif';
+      const tw = Math.min(150, ctx.measureText(p.sp).width + 30);
+      ctx.fillStyle = '#5a3a1e'; ctx.fillRect(v.x - 2, v.y - 78, 4, 30);
+      ctx.fillStyle = '#f3e2b8'; ctx.strokeStyle = '#8a5a2a'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.rect(v.x - tw / 2, v.y - 98, tw, 24); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#4a2a10'; ctx.textAlign = 'center';
+      ctx.fillText('🏪 ' + (p.sp.length > 18 ? p.sp.slice(0, 17) + '…' : p.sp), v.x, v.y - 81);
+    }
   }
 
   // kılıç savurma efekti
@@ -748,6 +761,13 @@ function setSkill(id, remain, total) {
 }
 
 let lastHud = 0;
+let lastCam = { x: 0, y: 0 };
+// haritaya tıklama: pazar tabelası
+cv.addEventListener('click', (e) => {
+  if (!myId || !window.shopUI) return;
+  const z = ZOOM();
+  shopUI.clickWorld(lastCam.x + (e.clientX - W / 2) / z, lastCam.y + (e.clientY - H / 2) / z);
+});
 function frame() {
   requestAnimationFrame(frame);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -757,6 +777,7 @@ function frame() {
   }
   const me = state.players.find((p) => p.id === myId);
   const cam = me ? (view.get(me.id) || me) : MAP.villages[0];
+  lastCam = { x: cam.x, y: cam.y };
   drawWorld(cam);
 
   const t = performance.now();
@@ -767,6 +788,7 @@ function frame() {
   if (me && t - lastHud > 80) {
     lastHud = t;
     if (window.itemsUI) itemsUI.tick();
+    if (window.shopUI) shopUI.tick();
     const m = state.me;
     setBar('#hpb', me.hp, me.mh, `CAN ${me.hp} / ${me.mh}`);
     setBar('#mpb', m.mp, m.mm, `MANA ${m.mp} / ${m.mm}`);

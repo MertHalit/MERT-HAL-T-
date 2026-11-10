@@ -398,7 +398,7 @@ function basicAttack(p) {
 
 function useSkill(p, key) {
   const s = CLASSES[p.cls].skills[key];
-  if (!s || p.mp < s.mp || isStunned(p)) return;
+  if (!s || p.mp < s.mp || isStunned(p) || p.shop) return;
   if (!p.gate.tryUse(key, now, s.cd)) return;
   p.mp -= s.mp;
   if (key !== 'e' || p.cls !== 'golge') breakInvis(p);
@@ -751,7 +751,7 @@ function spawnDrops(list, at, owner, power = 1) {
     const sp = (170 + Math.random() * 190) * power;
     const start = (at.r || 15) * 0.6;
     const g = {
-      id: 'g' + ++dropSeq, drop: true, itemId: d.id || 0, count: d.count || 1, plus: d.plus || 0, gold: d.gold || 0,
+      id: 'g' + ++dropSeq, drop: true, itemId: d.id || 0, count: d.count || 1, plus: d.plus || 0, gold: d.gold || 0, attrs: d.attrs || null,
       x: at.x + Math.cos(a) * start, y: at.y + Math.sin(a) * start, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
       ownerChar: owner ? owner.charId : null, ownerName: owner ? owner.n : null, ownUntil: now + DROP_OWN, expireAt: now + DROP_LIFE,
     };
@@ -795,7 +795,7 @@ function pickup(p) {
     if (g.gold) {
       gold += g.gold;
     } else {
-      const left = I.giveItem(p.inv, g.itemId, g.count, { plus: g.plus });
+      const left = I.giveItem(p.inv, g.itemId, g.count, { plus: g.plus, attrs: g.attrs ? g.attrs.map((a) => ({ ...a })) : undefined });
       const taken = g.count - left;
       if (taken > 0) got.push([g.itemId, taken, g.plus]);
       if (left > 0) { g.count = left; full = true; continue; }
@@ -973,7 +973,7 @@ function update() {
       }
     } else {
       p.dash = null;
-      if (!stunned) {
+      if (!stunned && !p.shop) {
         const mx = (inp.right ? 1 : 0) - (inp.left ? 1 : 0);
         const my = (inp.down ? 1 : 0) - (inp.up ? 1 : 0);
         const len = Math.hypot(mx, my);
@@ -995,7 +995,7 @@ function update() {
     if (!auditMove(p, px, py, DT, maxSpeed)) p.monitor && p.monitor.flag('speed', `${Math.round(dist({ x: px, y: py }, p))}px/tick`);
     grid.update(p);
 
-    if (inp.atk && !stunned) basicAttack(p);
+    if (inp.atk && !stunned && !p.shop) basicAttack(p);
 
     // yenilenme (köyde daha hızlı)
     const safe = inSafe(p);
@@ -1108,6 +1108,7 @@ function broadcast() {
           id: e.id, n: e.n, c: e.cls, f: e.f, x: Math.round(e.x), y: Math.round(e.y), a: +e.angle.toFixed(2),
           hp: Math.round(e.hp), mh: e.mh, l: e.lvl, dead: e.dead, ps: !!e.poison, st: e.stunUntil > now,
           fx: e.effects.filter((x) => x.until > now).map((x) => x.id),
+          sp: e.shop ? e.shop.title : undefined,
         });
       }
     }
@@ -1206,20 +1207,52 @@ const ITEM_HANDLERS = {
     if (T.cls && T.cls !== p.cls) return sendTo(p, { t: 'notice', msg: `Bu eşyayı sadece ${CLASSES[T.cls].name} kullanabilir.` });
     const es = I.EQUIP_SLOT[T.kind];
     const old = I.find(p.inv, I.EQUIP, es);
-    if (old) { old.container = I.BAG; old.slot = it.slot; }
+    const from = it.slot;
     it.container = I.EQUIP; it.slot = es;
+    if (old) {
+      // eski eşya, yenisinin boşalttığı yere (sığmazsa ilk boş yere) gider
+      const to = I.canPlace(p.inv, old.itemId, from, old) ? from : I.freeSlot(p.inv, old.itemId, old);
+      if (to < 0) { it.container = I.BAG; it.slot = from; return sendTo(p, { t: 'notice', msg: 'Çantada yer yok.' }); }
+      old.container = I.BAG; old.slot = to;
+    }
     itemChanged(p);
   },
 
+  // m.to verilirse eşya çantada o hücreye bırakılır (sürükle-bırak)
   unequip(p, m) {
     if (!slotArg(m.slot, 3)) return p.monitor.flag('invalidAction', 'unequip');
     const it = I.find(p.inv, I.EQUIP, m.slot);
     if (!it) return;
-    const free = I.freeSlot(p.inv);
-    if (free < 0) return sendTo(p, { t: 'notice', msg: 'Çantan dolu.' });
-    it.container = I.BAG; it.slot = free;
+    const to = slotArg(m.to, I.BAG_SIZE) && I.canPlace(p.inv, it.itemId, m.to) ? m.to : I.freeSlot(p.inv, it.itemId);
+    if (to < 0) return sendTo(p, { t: 'notice', msg: 'Çantan dolu.' });
+    it.container = I.BAG; it.slot = to;
     itemChanged(p);
   },
+
+  // çanta içinde sürükle-bırak (taşıma / yığma)
+  moveItem(p, m) {
+    if (!slotArg(m.from, I.BAG_SIZE) || !slotArg(m.to, I.BAG_SIZE)) return p.monitor.flag('invalidAction', 'moveItem');
+    const it = I.find(p.inv, I.BAG, m.from);
+    const r = I.moveInBag(p.inv, it, m.to);
+    if (r.error) { sendTo(p, { t: 'notice', msg: r.error }); return sendInv(p); }
+    itemChanged(p);
+  },
+
+  // eşyayı yere at (30 sn boyunca sadece sahibi geri alabilir)
+  dropItem(p, m) {
+    if (!slotArg(m.slot, I.BAG_SIZE)) return p.monitor.flag('invalidAction', 'dropItem');
+    if (p.dead || p.shop) return;
+    const it = I.find(p.inv, I.BAG, m.slot);
+    if (!it) return;
+    p.inv.splice(p.inv.indexOf(it), 1);
+    spawnDrops([{ id: it.itemId, count: it.count, plus: it.plus, attrs: it.attrs }], p, p, 0.25);
+    itemChanged(p);
+  },
+
+  openShop(p, m) { openShop(p, m); },
+  closeShop(p) { closeShop(p); },
+  viewShop(p, m) { viewShop(p, m); },
+  buy(p, m) { buy(p, m); },
 
   // demircide yükseltme: protect 0 = standart, 1 = Kutsama Parşömeni, 2 = Büyülü Metal
   upgrade(p, m) {
@@ -1262,6 +1295,134 @@ const ITEM_HANDLERS = {
     sendTo(p, { t: 'bonusRes', ok: true, kind: 'reroll', c: it.container, slot: it.slot });
   },
 };
+
+// ---------------- PAZAR TEZGAHI ----------------
+// Satıcının eşyaları envanterde 'pazar' kabına (container 3) taşınır, fiyatlarıyla birlikte saklanır.
+// SATIN ALMA NEDEN GÜVENLİ (race condition yok):
+//   1) Sunucu tek iş parçacıklı bir olay döngüsünde çalışır. buy() içindeki "kontrol et → aktar" adımları
+//      arada hiç beklemeden (await olmadan) tek seferde yapılır. Aynı eşyaya aynı milisaniyede iki istek gelse
+//      bile biri tamamen bittikten sonra diğeri işlenir; ikinci istek eşyayı bulamaz ("satılmış") ve reddedilir.
+//   2) Alıcı, gördüğü fiyatı ve eşya kimliğini isteğe ekler. Sunucudaki fiyat/eşya farklıysa satış reddedilir.
+//   3) Veritabanına iki oyuncunun envanteri ve altını TEK işlemde (transaction + FOR UPDATE kilidi) yazılır.
+const SHOP_MAX_PRICE = 2000000000;
+const SHOP_VIEW_R = 260;
+
+const shopItems = (p) => p.inv.filter((i) => i.container === I.SHOP).sort((a, b) => a.slot - b.slot);
+const invView = (i) => ({ k: i.slot, id: i.itemId, n: i.count, p: i.plus, a: i.attrs.filter((a) => a.type).map((a) => [a.type, a.value]), price: i.price });
+
+function shopMsg(seller) {
+  return { t: 'shop', id: seller.id, title: seller.shop.title, seller: seller.n, items: shopItems(seller).map(invView) };
+}
+
+function refreshShop(seller) {
+  sendTo(seller, { ...shopMsg(seller), t: 'myShop' });
+  for (const vid of seller.shop.viewers) {
+    const v = players.get(vid);
+    if (v && dist(v, seller) <= SHOP_VIEW_R + 200) sendTo(v, shopMsg(seller));
+    else seller.shop.viewers.delete(vid);
+  }
+}
+
+function openShop(p, m) {
+  if (p.shop) return sendTo(p, { t: 'notice', msg: 'Pazarın zaten açık.' });
+  if (p.dead || !inSafe(p)) return sendTo(p, { t: 'notice', msg: 'Pazar sadece köyde (güvenli bölgede) kurulabilir.' });
+  const title = String(m.title || '').trim().slice(0, 28) || `${p.n}'in Pazarı`;
+  const list = Array.isArray(m.items) ? m.items : [];
+  if (!list.length || list.length > I.SHOP_SIZE) return sendTo(p, { t: 'notice', msg: `Pazara 1-${I.SHOP_SIZE} eşya koyabilirsin.` });
+  const picked = [];
+  for (const e of list) {
+    const it = e && slotArg(e.s, I.BAG_SIZE) ? I.find(p.inv, I.BAG, e.s) : null;
+    const price = Number(e && e.price);
+    if (!it || picked.some((x) => x.it === it)) return p.monitor.flag('invalidAction', 'openShop');
+    if (!Number.isInteger(price) || price < 1 || price > SHOP_MAX_PRICE) return sendTo(p, { t: 'notice', msg: 'Fiyatlar 1 ile 2.000.000.000 altın arasında olmalı.' });
+    picked.push({ it, price });
+  }
+  picked.forEach(({ it, price }, k) => { it.container = I.SHOP; it.slot = k; it.price = price; });
+  p.shop = { title, viewers: new Set() };
+  p.input.up = p.input.down = p.input.left = p.input.right = p.input.atk = false;
+  itemChanged(p);
+  refreshShop(p);
+  events.push({ t: 'sys', msg: `${p.n} pazar kurdu: "${title}"` });
+}
+
+// Pazarı kapat: eşyalar çantaya döner. force: oyundan çıkarken (yer yoksa eşyalar pazar kabında kalır, sonraki girişte döner)
+function closeShop(p, force = false) {
+  if (!p.shop) return true;
+  const items = shopItems(p);
+  const sim = p.inv.filter((i) => i.container !== I.SHOP).map((i) => ({ ...i }));
+  const places = [];
+  for (const it of items) {
+    const s = I.freeSlot(sim, it.itemId);
+    if (s < 0 && !force) { sendTo(p, { t: 'notice', msg: 'Çantanda yer yok, pazar kapatılamadı.' }); return false; }
+    if (s >= 0) sim.push({ container: I.BAG, slot: s, itemId: it.itemId, count: 1 });
+    places.push(s);
+  }
+  items.forEach((it, i) => { if (places[i] >= 0) { it.container = I.BAG; it.slot = places[i]; it.price = null; } });
+  for (const vid of p.shop.viewers) { const v = players.get(vid); if (v) sendTo(v, { t: 'shopClosed', id: p.id }); }
+  p.shop = null;
+  sendTo(p, { t: 'myShop', closed: true });
+  itemChanged(p);
+  return true;
+}
+
+// Oyun girişinde: önceki oturumdan pazar kabında kalan eşyaları çantaya geri koy
+function returnShopItems(p) {
+  for (const it of shopItems(p)) {
+    const s = I.freeSlot(p.inv, it.itemId);
+    if (s >= 0) { it.container = I.BAG; it.slot = s; it.price = null; }
+  }
+}
+
+function viewShop(p, m) {
+  const seller = players.get(m.id);
+  if (!seller || !seller.shop) return sendTo(p, { t: 'shopClosed', id: m.id });
+  if (dist(p, seller) > SHOP_VIEW_R) return sendTo(p, { t: 'notice', msg: 'Pazara biraz daha yaklaşmalısın.' });
+  seller.shop.viewers.add(p.id);
+  sendTo(p, shopMsg(seller));
+}
+
+function buy(p, m) {
+  // --- KONTROL (beklemeden, tek seferde) ---
+  const fail = (msg) => sendTo(p, { t: 'buyRes', error: msg });
+  const seller = players.get(m.id);
+  if (!seller || !seller.shop) return fail('Bu pazar kapandı.');
+  if (seller === p) return fail('Kendi pazarından alamazsın.');
+  if (p.dead || dist(p, seller) > SHOP_VIEW_R) return fail('Pazara yakın olmalısın.');
+  const it = slotArg(m.k, I.SHOP_SIZE) ? I.find(seller.inv, I.SHOP, m.k) : null;
+  if (!it || it.itemId !== m.itemId) return fail('Bu eşya az önce satıldı.');
+  if (it.price !== m.price) return fail('Fiyat değişti, listeyi yenile.');
+  const qty = I.stackMax(it.itemId) > 1 ? Number(m.qty) : it.count;
+  if (!Number.isInteger(qty) || qty < 1 || qty > it.count) return fail('Geçersiz miktar.');
+  const total = it.price * qty;
+  if (!Number.isSafeInteger(total) || p.gold < total) return fail('Yeterli altının yok.');
+  const sim = p.inv.map((i) => ({ ...i }));
+  if (I.giveItem(sim, it.itemId, qty, { plus: it.plus }) > 0) return fail('Çantanda yer yok.');
+
+  // --- AKTAR (aynı adımda) ---
+  I.giveItem(p.inv, it.itemId, qty, { plus: it.plus, attrs: it.attrs.map((a) => ({ ...a })) });
+  it.count -= qty;
+  if (it.count <= 0) seller.inv.splice(seller.inv.indexOf(it), 1);
+  p.gold -= total;
+  seller.gold += total;
+
+  // --- KAYDET (iki oyuncu tek işlemde) ---
+  const snap = (x) => x.inv.map((i) => ({ ...i, attrs: i.attrs.map((a) => ({ ...a })) }));
+  const parties = [{ charId: seller.charId, inv: snap(seller), gold: seller.gold }, { charId: p.charId, inv: snap(p), gold: p.gold }];
+  const chain = Promise.all([p.saveChain, seller.saveChain])
+    .then(() => db.saveTrade(parties))
+    .catch((e) => console.error('Takas kayıt hatası:', e.message));
+  p.saveChain = chain;
+  seller.saveChain = chain;
+  db.logSecurity(p.accountId, p.charId, 'trade', `${seller.n} -> ${p.n}: ${I.ITEMS[it.itemId].name} x${qty} = ${total}`).catch(() => {});
+
+  const name = I.ITEMS[it.itemId].name + (it.plus ? ` +${it.plus}` : '') + (qty > 1 ? ` ×${qty}` : '');
+  sendTo(p, { t: 'buyRes', ok: true, name, total });
+  sendInv(p);
+  sendInv(seller);
+  sendTo(seller, { t: 'notice', msg: `${p.n} pazarından ${name} aldı (+${total.toLocaleString('tr-TR')} altın)` });
+  if (!shopItems(seller).length) { sendTo(seller, { t: 'notice', msg: 'Pazarındaki her şey satıldı!' }); closeShop(seller, true); }
+  else refreshShop(seller);
+}
 
 // ---------------- HESAP SİSTEMİ ----------------
 const USER_RE = /^[a-zA-Z0-9_]{3,16}$/;
@@ -1404,6 +1565,8 @@ const handlers = {
     me.inv = await db.getInventory(c.id);
     me.saveChain = Promise.resolve();
     if (me.inv.length === 0) giveStarterKit(me);
+    returnShopItems(me);
+    if (I.normalize(me.inv)) saveInv(me);
     me.skillLv = { q: 1, e: 1, r: 1, f: 1 };
     for (const sk of await db.getSkills(c.id)) {
       const key = SKILL_KEYS.find((k) => SKILL_IDS[k] === sk.skillId);
@@ -1426,7 +1589,7 @@ const handlers = {
     const mobInfo = {};
     for (const [k, t] of Object.entries(MOB_TYPES)) mobInfo[k] = { name: t.name, color: t.color, r: t.r, aggro: t.aggro, shape: t.shape };
     const itemInfo = {};
-    for (const [id, t] of Object.entries(I.ITEMS)) itemInfo[id] = { name: t.name, kind: t.kind, cls: t.cls, atk: t.atk, def: t.def, hp: t.hp, desc: t.desc, stack: t.stack || 1 };
+    for (const [id, t] of Object.entries(I.ITEMS)) itemInfo[id] = { name: t.name, kind: t.kind, cls: t.cls, atk: t.atk, def: t.def, hp: t.hp, desc: t.desc, stack: t.stack || 1, w: t.w || 1, h: t.h || 1 };
     const bonusInfo = {};
     for (const [id, b] of Object.entries(I.BONUSES)) bonusInfo[id] = { name: b.name, pct: b.pct };
     conn.send({
@@ -1449,6 +1612,7 @@ const handlers = {
 
 function removePlayer(p) {
   if (!players.has(p.id)) return;
+  closeShop(p, true);
   players.delete(p.id);
   grid.remove(p);
   saveChar(p);

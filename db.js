@@ -197,6 +197,27 @@ function createPg(url) {
         }
       });
     },
+    // Pazar satışı: iki oyuncunun envanteri ve altını TEK işlemde yazılır.
+    // Ya ikisi birden kaydedilir ya hiçbiri (sunucu çökse bile eşya kopyalanmaz / kaybolmaz).
+    async saveTrade(parties) {
+      await tx(async (c) => {
+        // satırları sabit sırayla kilitle (kilitlenme/deadlock olmasın)
+        const ids = parties.map((p) => p.charId).sort();
+        await c.query('SELECT id FROM characters WHERE id = ANY($1::bigint[]) ORDER BY id FOR UPDATE', [ids]);
+        for (const p of parties) {
+          await c.query('UPDATE characters SET gold = $2, updated_at = now() WHERE id = $1', [p.charId, p.gold]);
+          await c.query('DELETE FROM inventory WHERE character_id = $1', [p.charId]);
+          for (const it of p.inv) {
+            const row = itemColumns(it);
+            const keys = Object.keys(row);
+            await c.query(
+              `INSERT INTO inventory (character_id, ${keys.join(', ')}) VALUES ($1, ${keys.map((_, i) => '$' + (i + 2)).join(', ')})`,
+              [p.charId, ...keys.map((k) => row[k])],
+            );
+          }
+        }
+      });
+    },
     async getSkills(charId) {
       return (await q('SELECT skill_id, level, grade FROM skills WHERE character_id = $1', [charId])).rows
         .map((r) => ({ skillId: Number(r.skill_id), level: Number(r.level), grade: Number(r.grade) }));
@@ -303,6 +324,15 @@ function createFile() {
     async saveInventory(charId, items) {
       d.inventory = d.inventory.filter((i) => String(i.character_id) !== String(charId));
       for (const it of items) d.inventory.push({ uid: it.uid || nextId('inventory'), character_id: Number(charId), ...itemColumns(it) });
+      save();
+    },
+    async saveTrade(parties) {
+      for (const p of parties) {
+        const row = d.characters.find((x) => String(x.id) === String(p.charId));
+        if (row) row.gold = p.gold;
+        d.inventory = d.inventory.filter((i) => String(i.character_id) !== String(p.charId));
+        for (const it of p.inv) d.inventory.push({ uid: nextId('inventory'), character_id: Number(p.charId), ...itemColumns(it) });
+      }
       save();
     },
     async getSkills(charId) {

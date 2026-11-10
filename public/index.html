@@ -135,6 +135,38 @@
   #tSmith { left: 50%; top: 10px; transform: translateX(calc(-50% + 112px)); width: 44px; height: 44px; font-size: 18px; border-radius: 10px; background: #e8b04a33; }
   body.touch #bInv { display: none; }
 
+  /* Izgara envanter */
+  .gbag { position: relative; display: block !important; }
+  .gcell { position: absolute; background: #0007; border: 1px solid #4a2e22; border-radius: 5px; box-sizing: border-box; }
+  .gcell.ok { background: #2f7a2f99; border-color: #8aff8a; }
+  .gcell.bad { background: #8a2a2a99; border-color: #ff6a5a; }
+  .gitem { position: absolute; box-sizing: border-box; display: flex; align-items: center; justify-content: center; border-radius: 6px;
+    background: linear-gradient(#3a2219, #24140f); border: 1px solid #8a6a4a; cursor: grab; touch-action: none; }
+  .gitem:hover { border-color: #e8b04a; }
+  .gitem.sel { border-color: #e8b04a; box-shadow: 0 0 8px #e8b04a88; }
+  .gitem .plus { position: absolute; top: 1px; right: 4px; font-size: 11px; font-weight: bold; color: #ffd04a; text-shadow: 0 1px 2px #000; }
+  .gitem .cnt { position: absolute; bottom: 1px; right: 4px; font-size: 11px; color: #fff; text-shadow: 0 1px 2px #000; }
+  .ghost { position: fixed !important; z-index: 50; pointer-events: none; opacity: .9; box-shadow: 0 6px 20px #000a; }
+  .ghost.away { opacity: .6; border-color: #ff6a5a !important; }
+  .eqslot.ok .icell { border-color: #8aff8a; box-shadow: 0 0 10px #8aff8a88; }
+  #invEquip .icell { touch-action: none; }
+
+  /* Pazar */
+  #bShop { position: absolute; left: 250px; top: 92px; pointer-events: auto; background: #0009; color: #8aff8a; border: 1px solid #6b4a2a; border-radius: 8px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+  #pickHint { left: 360px !important; }
+  #tShop { left: 50%; top: 10px; transform: translateX(calc(-50% - 56px)); width: 44px; height: 44px; font-size: 18px; border-radius: 10px; }
+  body.touch #bShop { display: none; }
+  .srow { display: flex; align-items: center; gap: 10px; padding: 8px; border-bottom: 1px solid #3a2a1e; }
+  .sico { font-size: 26px; width: 40px; text-align: center; }
+  .sinfo { flex: 1; font-size: 13px; line-height: 1.4; }
+  .sinfo b { color: #e8b04a; }
+  .pwrap { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+  .pinput { width: 110px; padding: 6px 8px; border-radius: 6px; border: 1px solid #5a3a2a; background: #140a09; color: #f3e9d2; user-select: text; -webkit-user-select: text; }
+  .pinput.small { width: 60px; }
+  .price { color: #ffd04a; font-weight: bold; font-size: 13px; }
+  .sbtn.dim { opacity: .5; }
+  #shopSetup .txt { margin-bottom: 4px; }
+
   /* Dokunmatik kontroller */
   #touch { position: fixed; inset: 0; z-index: 6; pointer-events: none; }
   #joy { position: absolute; left: 30px; bottom: 120px; width: 130px; height: 130px; border-radius: 50%; background: #ffffff14; border: 2px solid #ffffff30; pointer-events: auto; }
@@ -230,6 +262,7 @@
   <div id="info"></div>
   <button id="exit">⟵ Karakter seç</button>
   <button id="bInv">🎒 Çanta (I)</button>
+  <button id="bShop" class="hidden">🏪 Pazar Kur</button>
   <div id="pickHint">Z: Topla</div>
   <div id="smithHint" class="hidden">🔨 Demirciyi açmak için <b>G</b></div>
   <div id="board"><h4>🏆 EN İYİLER</h4><div id="boardList"></div></div>
@@ -262,6 +295,7 @@
   <div class="tb" id="tInv">🎒</div>
   <div class="tb hidden" id="tSmith">🔨</div>
   <div class="tb hidden" id="tPick">🖐</div>
+  <div class="tb hidden" id="tShop">🏪</div>
 </div>
 
 <!-- ÇANTA -->
@@ -297,11 +331,45 @@
   </div>
 </div>
 
+<!-- PAZAR KUR (satıcı) -->
+<div id="shopSetup" class="ipanel hidden">
+  <div class="ihead"><b>🏪 Pazar Tezgahı</b><button class="x" id="shopSetupClose">✕</button></div>
+  <div id="shopSetupBody" class="ibody">
+    <div>
+      <div class="ilabel">Çantan (satılacak eşyaya tıkla)</div>
+      <div id="shopBag"></div>
+    </div>
+    <div>
+      <div class="ilabel">Pazar adı</div>
+      <input class="txt" id="shopTitle" maxlength="28" placeholder="Pazarının adı">
+      <div class="ilabel">Tezgah (en fazla 8 eşya, birim fiyat)</div>
+      <div id="shopStall"></div>
+      <button class="big" id="shopGo">PAZARI AÇ</button>
+      <div class="muted" style="font-size:12px;margin-top:6px">Pazar açıkken yerinden kıpırdayamazsın. Oyundan çıkınca pazar kapanır, eşyalar çantana döner.</div>
+    </div>
+  </div>
+  <div id="shopOpenBody" class="hidden" style="padding:12px 14px">
+    <div id="shopOpenTitle" style="margin-bottom:8px;color:#8aff8a"></div>
+    <div id="shopOpenList"></div>
+    <button class="big" id="shopStop" style="max-width:280px">PAZARI KAPAT</button>
+  </div>
+</div>
+
+<!-- PAZAR (alıcı) -->
+<div id="shopView" class="ipanel hidden">
+  <div class="ihead"><b id="shopViewTitle">🏪 Pazar</b><button class="sbtn" id="shopRefresh" style="margin-left:auto">↻ Yenile</button><button class="x" id="shopViewClose">✕</button></div>
+  <div style="padding:10px 14px">
+    <div id="shopViewSeller" class="muted" style="margin-bottom:8px"></div>
+    <div id="shopViewList"></div>
+  </div>
+</div>
+
 <div id="death" class="hidden"><h2>ÖLDÜN</h2><p id="deathMsg"></p></div>
 <div id="toast"></div>
 
 <script src="config.js"></script>
 <script src="client.js"></script>
 <script src="items-ui.js"></script>
+<script src="shop-ui.js"></script>
 </body>
 </html>
