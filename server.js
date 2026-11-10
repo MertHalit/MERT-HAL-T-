@@ -3,22 +3,37 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+const { promisify } = require('util');
 const { WebSocketServer } = require('ws');
+const db = require('./db');
 
+const scrypt = promisify(crypto.scrypt);
 const PORT = process.env.PORT || 3000;
 const TICK = 30; // saniyede 30 güncelleme
 const DT = 1 / TICK;
+const MAX_CHARS = 3;
+
+// ---------------- KRALLIKLAR ----------------
+const FACTIONS = {
+  kizil: { name: 'Kızıl Ejder Krallığı', short: 'Kızıl Ejder', color: '#e04a3a', village: { x: 450, y: 450 } },
+  gok: { name: 'Gök Kaplan Krallığı', short: 'Gök Kaplan', color: '#3a8de0', village: { x: 2550, y: 450 } },
+  yesim: { name: 'Yeşim Turna Krallığı', short: 'Yeşim Turna', color: '#3ac06a', village: { x: 1500, y: 1950 } },
+};
 
 // ---------------- HARİTA ----------------
+const VILLAGE_R = 230;
 const MAP = {
-  w: 2400,
-  h: 1600,
-  safe: { x: 260, y: 800, r: 220 }, // köy: burada hasar yok
+  w: 3000,
+  h: 2400,
+  villages: Object.entries(FACTIONS).map(([f, d]) => ({ f, x: d.village.x, y: d.village.y, r: VILLAGE_R })),
   rocks: [
-    { x: 700, y: 400, r: 60 }, { x: 900, y: 1150, r: 80 }, { x: 1200, y: 700, r: 70 },
-    { x: 1500, y: 300, r: 55 }, { x: 1650, y: 1000, r: 90 }, { x: 2000, y: 600, r: 65 },
-    { x: 1950, y: 1350, r: 70 }, { x: 1250, y: 1400, r: 50 }, { x: 600, y: 1350, r: 55 },
-    { x: 2200, y: 200, r: 50 }, { x: 1100, y: 250, r: 45 },
+    { x: 1000, y: 700, r: 70 }, { x: 1500, y: 500, r: 60 }, { x: 2000, y: 700, r: 70 },
+    { x: 1200, y: 1200, r: 90 }, { x: 1800, y: 1200, r: 80 }, { x: 1500, y: 900, r: 50 },
+    { x: 800, y: 1400, r: 60 }, { x: 2200, y: 1400, r: 60 }, { x: 1000, y: 1900, r: 55 },
+    { x: 2000, y: 1900, r: 55 }, { x: 400, y: 1300, r: 70 }, { x: 2600, y: 1300, r: 70 },
+    { x: 1500, y: 1450, r: 65 }, { x: 700, y: 2100, r: 50 }, { x: 2300, y: 2100, r: 50 },
+    { x: 1500, y: 150, r: 45 },
   ],
 };
 
@@ -48,32 +63,35 @@ const MAX_LEVEL = 30;
 const PLAYER_R = 20;
 const RESPAWN = 5;
 
-const players = new Map(); // id -> oyuncu
+const players = new Map(); // id -> oyuncu (oyunda olan karakterler)
 const projectiles = [];
 const dummies = [];
 let events = [];
 let nextId = 1;
 let now = 0;
 
-for (let i = 0; i < 4; i++) {
-  dummies.push({
-    id: 'd' + i, dummy: true, n: 'Antrenman Kuklası', x: 580, y: 560 + i * 160,
-    hp: 300, mh: 300, dead: false, respawnAt: 0, lvl: 1,
-  });
-}
+const dummySpots = [
+  [750, 450], [700, 620], [560, 720], // Kızıl Ejder köyü yanı
+  [2250, 450], [2300, 620], [2440, 720], // Gök Kaplan köyü yanı
+  [1300, 1700], [1500, 1660], [1700, 1700], // Yeşim Turna köyü yanı
+];
+dummySpots.forEach(([x, y], i) => {
+  dummies.push({ id: 'd' + i, dummy: true, n: 'Antrenman Kuklası', x, y, hp: 300, mh: 300, dead: false, respawnAt: 0, lvl: 1 });
+});
 
 // ---------------- YARDIMCILAR ----------------
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-const inSafe = (o) => dist(o, MAP.safe) < MAP.safe.r;
+const inSafe = (o) => MAP.villages.some((v) => dist(o, v) < v.r);
 const scale = (p) => 1 + 0.1 * (p.lvl - 1);
 const dmgMul = (p) => 1 + 0.08 * (p.lvl - 1);
 const xpNeed = (lvl) => 100 * lvl;
 
-function spawnPoint() {
+function spawnPoint(faction) {
+  const v = FACTIONS[faction].village;
   const a = Math.random() * Math.PI * 2;
-  const r = Math.random() * (MAP.safe.r - 40);
-  return { x: MAP.safe.x + Math.cos(a) * r, y: MAP.safe.y + Math.sin(a) * r };
+  const r = Math.random() * (VILLAGE_R - 50);
+  return { x: v.x + Math.cos(a) * r, y: v.y + Math.sin(a) * r };
 }
 
 function resolveCollisions(o, r) {
@@ -96,6 +114,13 @@ function allTargets() {
   return list;
 }
 
+// Aynı krallıktan oyuncular birbirine vuramaz.
+function canHurt(src, t) {
+  if (!t || t.dead || src === t) return false;
+  if (src && !src.dummy && !t.dummy && src.f === t.f) return false;
+  return true;
+}
+
 function breakInvis(p) {
   if (p.invisUntil > now) p.invisUntil = 0;
 }
@@ -108,8 +133,7 @@ function recalcStats(p) {
 
 // ---------------- HASAR / ÖLÜM ----------------
 function dealDamage(src, target, amount) {
-  if (!target || target.dead) return;
-  if (src === target) return;
+  if (!canHurt(src, target)) return;
   if (inSafe(target) || (src && !src.dummy && inSafe(src))) return;
   if (target.shieldUntil > now) amount *= 0.5;
   amount = Math.round(amount);
@@ -129,14 +153,16 @@ function kill(src, target) {
   }
   target.deaths++;
   target.streak = 0;
+  target.dirty = true;
   if (src && !src.dummy) {
     src.kills++;
     src.streak = (src.streak || 0) + 1;
+    src.dirty = true;
     gainXp(src, 50 + 20 * target.lvl);
-    events.push({ t: 'kill', k: src.n, v: target.n, s: src.streak });
+    events.push({ t: 'kill', k: src.n, kf: src.f, v: target.n, vf: target.f, s: src.streak });
     sendTo(target, { t: 'dead', by: src.n, in: RESPAWN });
   } else {
-    events.push({ t: 'kill', k: '???', v: target.n, s: 0 });
+    events.push({ t: 'kill', k: '???', v: target.n, vf: target.f, s: 0 });
     sendTo(target, { t: 'dead', by: 'bilinmeyen', in: RESPAWN });
   }
 }
@@ -144,6 +170,7 @@ function kill(src, target) {
 function gainXp(p, amount) {
   if (p.dummy || p.lvl >= MAX_LEVEL) return;
   p.xp += amount;
+  p.dirty = true;
   while (p.xp >= xpNeed(p.lvl) && p.lvl < MAX_LEVEL) {
     p.xp -= xpNeed(p.lvl);
     p.lvl++;
@@ -151,7 +178,9 @@ function gainXp(p, amount) {
     p.hp = p.mh;
     p.mp = p.mm;
     events.push({ t: 'lvl', id: p.id, l: p.lvl, n: p.n });
+    saveChar(p);
   }
+  if (p.lvl >= MAX_LEVEL) p.xp = 0;
 }
 
 // ---------------- SALDIRI / BECERİLER ----------------
@@ -174,7 +203,7 @@ function basicAttack(p) {
   if (c.atk.type === 'melee') {
     events.push({ t: 'swing', id: p.id, a: +p.angle.toFixed(2), r: c.atk.range });
     for (const t of allTargets()) {
-      if (t === p) continue;
+      if (!canHurt(p, t)) continue;
       const d = dist(p, t);
       if (d > c.atk.range + PLAYER_R) continue;
       let diff = Math.atan2(t.y - p.y, t.x - p.x) - p.angle;
@@ -227,7 +256,7 @@ function update() {
   for (const p of players.values()) {
     if (p.dead) {
       if (now >= p.respawnAt) {
-        Object.assign(p, spawnPoint(), { dead: false, hp: p.mh, mp: p.mm });
+        Object.assign(p, spawnPoint(p.f), { dead: false, hp: p.mh, mp: p.mm });
         sendTo(p, { t: 'respawn' });
       }
       continue;
@@ -240,7 +269,7 @@ function update() {
       p.x += p.dash.vx * DT;
       p.y += p.dash.vy * DT;
       for (const t of allTargets()) {
-        if (t === p || p.dash.hit.has(t.id)) continue;
+        if (!canHurt(p, t) || p.dash.hit.has(t.id)) continue;
         if (dist(p, t) < PLAYER_R * 2 + 10) {
           p.dash.hit.add(t.id);
           dealDamage(p, t, p.dash.dmg);
@@ -248,8 +277,8 @@ function update() {
       }
     } else {
       p.dash = null;
-      let mx = (inp.right ? 1 : 0) - (inp.left ? 1 : 0);
-      let my = (inp.down ? 1 : 0) - (inp.up ? 1 : 0);
+      const mx = (inp.right ? 1 : 0) - (inp.left ? 1 : 0);
+      const my = (inp.down ? 1 : 0) - (inp.up ? 1 : 0);
       const len = Math.hypot(mx, my);
       if (len) {
         p.x += (mx / len) * c.speed * DT;
@@ -261,9 +290,9 @@ function update() {
     if (inp.atk) basicAttack(p);
 
     // yenilenme (köyde daha hızlı)
-    const regen = inSafe(p) ? 4 : 1;
-    p.mp = Math.min(p.mm, p.mp + 6 * regen * DT);
-    p.hp = Math.min(p.mh, p.hp + (inSafe(p) ? 15 : 1) * DT);
+    const safe = inSafe(p);
+    p.mp = Math.min(p.mm, p.mp + 6 * (safe ? 4 : 1) * DT);
+    p.hp = Math.min(p.mh, p.hp + (safe ? 15 : 1) * DT);
 
     // zehir
     if (p.poison) {
@@ -291,9 +320,9 @@ function update() {
     if (!done) {
       for (const t of allTargets()) {
         if (t.id === pr.owner) continue;
+        if (owner && !canHurt(owner, t)) continue; // dost oyuncunun içinden geçer
         if (dist(pr, t) < PLAYER_R + pr.r) {
-          if (pr.kind === 'fire') { /* patlama aşağıda */ }
-          else dealDamage(owner, t, pr.dmg);
+          if (pr.kind !== 'fire') dealDamage(owner, t, pr.dmg);
           if (pr.kind === 'poison' && !t.dummy && !t.dead && !inSafe(t)) {
             t.poison = { until: now + 4, dps: 8 * (owner ? dmgMul(owner) : 1), src: pr.owner, acc: 0 };
           }
@@ -319,7 +348,8 @@ function update() {
 
 // ---------------- AĞ ----------------
 function sendTo(p, msg) {
-  if (p.ws.readyState === 1) p.ws.send(JSON.stringify(msg));
+  const ws = p.ws || p;
+  if (ws.readyState === 1) ws.send(JSON.stringify(msg));
 }
 
 let tickCount = 0;
@@ -332,19 +362,20 @@ function broadcast() {
     board = [...players.values()]
       .sort((a, b) => b.kills - a.kills || b.lvl - a.lvl)
       .slice(0, 5)
-      .map((p) => ({ n: p.n, k: p.kills, d: p.deaths, l: p.lvl }));
+      .map((p) => ({ n: p.n, k: p.kills, d: p.deaths, l: p.lvl, f: p.f }));
   }
   const evs = events;
   events = [];
   const pub = (p) => ({
-    id: p.id, n: p.n, c: p.cls, x: Math.round(p.x), y: Math.round(p.y), a: +p.angle.toFixed(2),
+    id: p.id, n: p.n, c: p.cls, f: p.f, x: Math.round(p.x), y: Math.round(p.y), a: +p.angle.toFixed(2),
     hp: Math.round(p.hp), mh: p.mh, l: p.lvl, dead: p.dead, sh: p.shieldUntil > now,
     iv: p.invisUntil > now, ps: !!p.poison,
   });
   const pubList = [...players.values()].map((p) => [p, pub(p)]);
 
   for (const me of players.values()) {
-    const list = pubList.filter(([p]) => p === me || !(p.invisUntil > now)).map(([, d]) => d);
+    // görünmez oyuncular sadece kendine ve kendi krallığına görünür
+    const list = pubList.filter(([p]) => p === me || p.f === me.f || !(p.invisUntil > now)).map(([, d]) => d);
     const msg = {
       t: 'state', players: list, proj: projData, dummies: dumData, ev: evs,
       me: {
@@ -361,19 +392,198 @@ function broadcast() {
   }
 }
 
+// ---------------- HESAP SİSTEMİ ----------------
+const USER_RE = /^[a-zA-Z0-9_]{3,16}$/;
+const NAME_RE = /^[\p{L}\p{N}_]{3,14}$/u;
+
+async function hashPass(pass, salt) {
+  return (await scrypt(pass, salt, 32)).toString('hex');
+}
+
+function charSummary(c) {
+  return { id: c.id, name: c.name, cls: c.cls, f: c.faction, lvl: c.lvl, kills: c.kills };
+}
+
+async function loadChars(acc) {
+  const list = [];
+  for (const id of acc.chars) {
+    const c = await db.get('char:' + id);
+    if (c) list.push(charSummary(c));
+  }
+  return list;
+}
+
+async function newToken(acc) {
+  const token = crypto.randomBytes(24).toString('hex');
+  const all = [...(acc.tokens || []), token];
+  const old = all.slice(0, -5); // en fazla 5 cihazda açık oturum
+  acc.tokens = all.slice(-5);
+  await db.set('tok:' + token, acc.user.toLowerCase());
+  await db.set('acc:' + acc.user.toLowerCase(), acc);
+  for (const t of old) await db.del('tok:' + t);
+  return token;
+}
+
+async function sendAccount(conn, token) {
+  conn.send({
+    t: 'account', user: conn.acc.user, faction: conn.acc.faction, token,
+    chars: await loadChars(conn.acc), max: MAX_CHARS,
+  });
+}
+
+function saveChar(p) {
+  p.dirty = false;
+  return db.set('char:' + p.charId, {
+    id: p.charId, owner: p.owner, name: p.n, cls: p.cls, faction: p.f,
+    lvl: p.lvl, xp: p.xp, kills: p.kills, deaths: p.deaths, created: p.created,
+  }).catch((e) => console.error('Kayıt hatası:', e.message));
+}
+
+// periyodik kayıt
+setInterval(() => {
+  for (const p of players.values()) if (p.dirty) saveChar(p);
+}, 15000);
+
+const handlers = {
+  async register(conn, m) {
+    const user = String(m.user || '');
+    const pass = String(m.pass || '');
+    if (!USER_RE.test(user)) return conn.err('Kullanıcı adı 3-16 karakter olmalı (harf, rakam, _).');
+    if (pass.length < 6 || pass.length > 64) return conn.err('Şifre en az 6 karakter olmalı.');
+    const salt = crypto.randomBytes(16).toString('hex');
+    const acc = { user, salt, hash: await hashPass(pass, salt), faction: null, chars: [], tokens: [], created: Date.now() };
+    if (!(await db.claim('acc:' + user.toLowerCase(), acc))) return conn.err('Bu kullanıcı adı alınmış.');
+    conn.acc = acc;
+    await sendAccount(conn, await newToken(acc));
+  },
+
+  async login(conn, m) {
+    if (conn.fails >= 5) return conn.err('Çok fazla hatalı deneme. Biraz bekle.');
+    const user = String(m.user || '');
+    const acc = USER_RE.test(user) ? await db.get('acc:' + user.toLowerCase()) : null;
+    const ok = acc && crypto.timingSafeEqual(Buffer.from(await hashPass(String(m.pass || ''), acc.salt), 'hex'), Buffer.from(acc.hash, 'hex'));
+    if (!ok) {
+      conn.fails = (conn.fails || 0) + 1;
+      if (conn.fails >= 5) setTimeout(() => { conn.fails = 0; }, 30000);
+      return conn.err('Kullanıcı adı veya şifre yanlış.');
+    }
+    conn.acc = acc;
+    await sendAccount(conn, await newToken(acc));
+  },
+
+  async token(conn, m) {
+    const userKey = await db.get('tok:' + String(m.token || '').slice(0, 64));
+    const acc = userKey && (await db.get('acc:' + userKey));
+    if (!acc || !(acc.tokens || []).includes(m.token)) return conn.send({ t: 'tokenBad' });
+    conn.acc = acc;
+    await sendAccount(conn, m.token);
+  },
+
+  async logout(conn, m) {
+    if (!conn.acc) return;
+    const t = String(m.token || '');
+    conn.acc.tokens = (conn.acc.tokens || []).filter((x) => x !== t);
+    await db.set('acc:' + conn.acc.user.toLowerCase(), conn.acc);
+    await db.del('tok:' + t);
+    conn.acc = null;
+  },
+
+  async create(conn, m) {
+    const acc = conn.acc;
+    if (!acc || conn.me) return;
+    acc.chars = acc.chars || [];
+    if (acc.chars.length >= MAX_CHARS) return conn.err(`En fazla ${MAX_CHARS} karakter açabilirsin.`);
+    const name = String(m.name || '').trim();
+    if (!NAME_RE.test(name)) return conn.err('Karakter adı 3-14 karakter olmalı (harf, rakam, _).');
+    if (!CLASSES[m.cls]) return conn.err('Geçersiz sınıf.');
+    const faction = acc.faction || m.faction;
+    if (!FACTIONS[faction]) return conn.err('Bir krallık seç.');
+    const id = crypto.randomBytes(8).toString('hex');
+    if (!(await db.claim('name:' + name.toLowerCase(), id))) return conn.err('Bu karakter adı alınmış.');
+    const c = { id, owner: acc.user.toLowerCase(), name, cls: m.cls, faction, lvl: 1, xp: 0, kills: 0, deaths: 0, created: Date.now() };
+    await db.set('char:' + id, c);
+    acc.faction = faction; // hesabın krallığı ilk karakterde belirlenir
+    acc.chars.push(id);
+    await db.set('acc:' + acc.user.toLowerCase(), acc);
+    await sendAccount(conn);
+  },
+
+  async remove(conn, m) {
+    const acc = conn.acc;
+    if (!acc || conn.me || !acc.chars.includes(m.id)) return;
+    const c = await db.get('char:' + m.id);
+    if ([...players.values()].some((p) => p.charId === m.id)) return conn.err('Bu karakter şu an oyunda.');
+    acc.chars = acc.chars.filter((x) => x !== m.id);
+    if (acc.chars.length === 0) acc.faction = null; // hiç karakter kalmazsa krallık yeniden seçilebilir
+    await db.set('acc:' + acc.user.toLowerCase(), acc);
+    if (c) { await db.del('char:' + m.id); await db.del('name:' + c.name.toLowerCase()); }
+    await sendAccount(conn);
+  },
+
+  async play(conn, m) {
+    const acc = conn.acc;
+    if (!acc || conn.me || !acc.chars.includes(m.id)) return;
+    const c = await db.get('char:' + m.id);
+    if (!c) return conn.err('Karakter bulunamadı.');
+    // aynı hesap başka yerde oyundaysa onu çıkar
+    for (const p of players.values()) {
+      if (p.owner === acc.user.toLowerCase()) {
+        sendTo(p, { t: 'kicked', msg: 'Hesabına başka bir yerden girildi.' });
+        p.ws.close();
+        removePlayer(p);
+      }
+    }
+    const me = {
+      id: nextId++, ws: conn.ws, charId: c.id, owner: c.owner, n: c.name, cls: c.cls, f: c.faction,
+      lvl: c.lvl, xp: c.xp, kills: c.kills, deaths: c.deaths, created: c.created, streak: 0,
+      angle: 0, dead: false, cd: { atk: 0, q: 0, e: 0 }, shieldUntil: 0, invisUntil: 0, poison: null, dirty: false,
+      input: { up: false, down: false, left: false, right: false, atk: false, angle: 0 },
+      ...spawnPoint(c.faction),
+    };
+    recalcStats(me);
+    me.hp = me.mh;
+    me.mp = me.mm;
+    conn.me = me;
+    players.set(me.id, me);
+    const classInfo = {};
+    for (const [k, cl] of Object.entries(CLASSES)) {
+      classInfo[k] = { name: cl.name, color: cl.color, q: cl.q, e: cl.e, atkCd: cl.atk.cd };
+    }
+    const factionInfo = {};
+    for (const [k, f] of Object.entries(FACTIONS)) factionInfo[k] = { name: f.name, short: f.short, color: f.color };
+    conn.send({ t: 'welcome', id: me.id, map: MAP, classes: classInfo, factions: factionInfo, me: { f: me.f, cls: me.cls } });
+    events.push({ t: 'sys', msg: `${me.n} oyuna katıldı (${FACTIONS[me.f].short} · ${CLASSES[me.cls].name})` });
+  },
+
+  async leave(conn) {
+    if (!conn.me) return;
+    removePlayer(conn.me);
+    conn.me = null;
+    await sendAccount(conn);
+  },
+};
+
+function removePlayer(p) {
+  if (!players.has(p.id)) return;
+  players.delete(p.id);
+  saveChar(p);
+  events.push({ t: 'sys', msg: `${p.n} oyundan ayrıldı` });
+}
+
 // ---------------- HTTP + WEBSOCKET ----------------
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css',
   '.json': 'application/manifest+json', '.svg': 'image/svg+xml', '.png': 'image/png',
 };
+const PUBLIC = path.join(__dirname, 'public');
 const server = http.createServer((req, res) => {
   let file = req.url.split('?')[0];
   if (file === '/') file = '/index.html';
-  const full = path.join(__dirname, 'public', path.normalize(file).replace(/^(\.\.[/\\])+/, ''));
-  if (!full.startsWith(path.join(__dirname, 'public'))) { res.writeHead(403); return res.end(); }
+  const full = path.join(PUBLIC, path.normalize(file));
+  if (!full.startsWith(PUBLIC + path.sep)) { res.writeHead(403); return res.end(); }
   fs.readFile(full, (err, data) => {
     if (err) { res.writeHead(404); return res.end('Bulunamadı'); }
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(full)] || 'application/octet-stream' });
+    res.writeHead(200, { 'Content-Type': MIME[path.extname(full)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
     res.end(data);
   });
 });
@@ -381,56 +591,60 @@ const server = http.createServer((req, res) => {
 const wss = new WebSocketServer({ server, maxPayload: 4096 });
 
 wss.on('connection', (ws) => {
-  let me = null;
-  ws.on('message', (raw) => {
+  const conn = {
+    ws, acc: null, me: null, fails: 0, busy: false,
+    send: (msg) => sendTo(ws, msg),
+    err: (msg) => sendTo(ws, { t: 'error', msg }),
+  };
+
+  ws.on('message', async (raw) => {
     let m;
     try { m = JSON.parse(raw); } catch { return; }
     if (!m || typeof m !== 'object') return;
+    const me = conn.me;
 
-    if (m.t === 'join' && !me) {
-      const cls = CLASSES[m.cls] ? m.cls : 'savasci';
-      const name = String(m.name || '').replace(/[^\p{L}\p{N}_ -]/gu, '').trim().slice(0, 14) || 'Oyuncu' + nextId;
-      me = {
-        id: nextId++, ws, n: name, cls, lvl: 1, xp: 0, kills: 0, deaths: 0, streak: 0,
-        angle: 0, dead: false, cd: { atk: 0, q: 0, e: 0 }, shieldUntil: 0, invisUntil: 0, poison: null,
-        input: { up: false, down: false, left: false, right: false, atk: false, angle: 0 },
-        ...spawnPoint(),
-      };
-      recalcStats(me);
-      me.hp = me.mh;
-      me.mp = me.mm;
-      players.set(me.id, me);
-      const classInfo = {};
-      for (const [k, c] of Object.entries(CLASSES)) {
-        classInfo[k] = { name: c.name, color: c.color, q: c.q, e: c.e, atkCd: c.atk.cd };
+    // oyun içi mesajlar (hızlı yol)
+    if (me && players.has(me.id)) {
+      if (m.t === 'input') {
+        const i = me.input;
+        i.up = !!m.up; i.down = !!m.down; i.left = !!m.left; i.right = !!m.right; i.atk = !!m.atk;
+        if (Number.isFinite(m.angle)) i.angle = m.angle;
+        return;
       }
-      sendTo(me, { t: 'welcome', id: me.id, map: MAP, classes: classInfo });
-      events.push({ t: 'sys', msg: `${me.n} oyuna katıldı (${CLASSES[cls].name})` });
-      return;
+      if (m.t === 'skill') {
+        if (!me.dead && (m.k === 'q' || m.k === 'e')) useSkill(me, m.k);
+        return;
+      }
+      if (m.t === 'chat') {
+        const t = Date.now();
+        if (me.lastChat && t - me.lastChat < 800) return; // spam koruması
+        me.lastChat = t;
+        const msg = String(m.msg || '').trim().slice(0, 120);
+        if (msg) events.push({ t: 'chat', n: me.n, f: me.f, msg });
+        return;
+      }
     }
-    if (!me) return;
 
-    if (m.t === 'input') {
-      const i = me.input;
-      i.up = !!m.up; i.down = !!m.down; i.left = !!m.left; i.right = !!m.right; i.atk = !!m.atk;
-      if (Number.isFinite(m.angle)) i.angle = m.angle;
-    } else if (m.t === 'skill' && !me.dead && (m.k === 'q' || m.k === 'e')) {
-      useSkill(me, m.k);
-    } else if (m.t === 'chat') {
-      const now2 = Date.now();
-      if (me.lastChat && now2 - me.lastChat < 800) return; // spam koruması
-      me.lastChat = now2;
-      const msg = String(m.msg || '').trim().slice(0, 120);
-      if (msg) events.push({ t: 'chat', n: me.n, msg });
-    }
+    // hesap işlemleri (sırayla, aynı anda bir tane)
+    const h = handlers[m.t];
+    if (!h || conn.busy) return;
+    conn.busy = true;
+    try { await h(conn, m); } catch (e) { console.error(e); conn.err('Sunucu hatası, tekrar dene.'); }
+    conn.busy = false;
   });
+
   ws.on('close', () => {
-    if (me) {
-      players.delete(me.id);
-      events.push({ t: 'sys', msg: `${me.n} oyundan ayrıldı` });
-    }
+    if (conn.me) removePlayer(conn.me);
   });
 });
 
 setInterval(update, 1000 / TICK);
-server.listen(PORT, () => console.log(`PvP Server çalışıyor: http://localhost:${PORT}`));
+
+function shutdown() {
+  Promise.all([...players.values()].map(saveChar)).finally(() => process.exit(0));
+  setTimeout(() => process.exit(0), 3000);
+}
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
+
+server.listen(PORT, () => console.log(`PvP Server çalışıyor: http://localhost:${PORT} · veritabanı: ${db.kind}`));

@@ -13,28 +13,46 @@
   canvas#game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
   .hidden { display: none !important; }
 
-  /* Giriş ekranı */
-  #login { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px;
+  /* Menü ekranları */
+  .screen { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px;
     background: radial-gradient(circle at 50% 30%, #4a1414 0%, #1a0b0b 60%, #0b0606 100%); z-index: 20; overflow-y: auto; }
-  .panel { width: 100%; max-width: 720px; text-align: center; }
+  .panel { width: 100%; max-width: 760px; text-align: center; margin: auto; }
   h1 { font-size: clamp(34px, 8vw, 60px); margin: 0 0 4px; letter-spacing: 3px; color: #e8b04a;
     text-shadow: 0 0 18px #b3261e, 0 3px 0 #5a1010; }
+  h2 { color: #e8b04a; margin: 0 0 14px; font-size: 24px; }
+  h3 { color: #c9a98a; margin: 18px 0 10px; font-size: 15px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; }
   .sub { color: #c9a98a; margin-bottom: 22px; }
-  .classes { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 18px; }
-  .cls { background: #2a1614cc; border: 2px solid #5a3a2a; border-radius: 12px; padding: 14px; cursor: pointer; text-align: left; transition: .15s; }
-  .cls:hover { border-color: #a0703a; }
-  .cls.sel { border-color: #e8b04a; box-shadow: 0 0 16px #e8b04a55; background: #3a1d18; }
-  .cls b { font-size: 18px; display: block; margin-bottom: 4px; }
-  .cls .dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
-  .cls small { color: #c9b39a; line-height: 1.45; display: block; }
-  input#name { width: 100%; max-width: 320px; padding: 12px 14px; font-size: 17px; border-radius: 10px; border: 2px solid #5a3a2a;
-    background: #1e100e; color: #f3e9d2; outline: none; user-select: text; -webkit-user-select: text; }
-  input#name:focus { border-color: #e8b04a; }
-  button.big { display: block; margin: 14px auto 0; padding: 13px 40px; font-size: 19px; font-weight: bold; border: 0; border-radius: 10px;
+  .box { background: #1e100ecc; border: 2px solid #5a3a2a; border-radius: 14px; padding: 20px; max-width: 380px; margin: 0 auto; }
+  .tabs { display: flex; margin-bottom: 14px; border-radius: 10px; overflow: hidden; border: 2px solid #5a3a2a; }
+  .tabs button { flex: 1; padding: 10px; border: 0; background: #2a1614; color: #c9a98a; font-size: 15px; cursor: pointer; }
+  .tabs button.on { background: #e8b04a; color: #2a1206; font-weight: bold; }
+  input.txt { display: block; width: 100%; padding: 12px 14px; font-size: 16px; border-radius: 10px; border: 2px solid #5a3a2a; margin-bottom: 10px;
+    background: #140a09; color: #f3e9d2; outline: none; user-select: text; -webkit-user-select: text; }
+  input.txt:focus { border-color: #e8b04a; }
+  button.big { display: block; width: 100%; margin: 6px auto 0; padding: 13px 20px; font-size: 18px; font-weight: bold; border: 0; border-radius: 10px;
     background: linear-gradient(#e8b04a, #b3741e); color: #2a1206; cursor: pointer; box-shadow: 0 4px 0 #6b3d0e; }
   button.big:active { transform: translateY(2px); box-shadow: 0 2px 0 #6b3d0e; }
-  .help { margin-top: 18px; color: #a88d74; font-size: 13px; line-height: 1.6; }
-  #status { margin-top: 10px; color: #ff8a7a; min-height: 20px; }
+  button.big:disabled { opacity: .5; }
+  button.link { background: none; border: 0; color: #c9a98a; text-decoration: underline; cursor: pointer; font-size: 14px; margin-top: 14px; }
+  .msg { margin-top: 10px; color: #ff8a7a; min-height: 20px; font-size: 14px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+  .card { background: #2a1614cc; border: 2px solid #5a3a2a; border-radius: 12px; padding: 14px; cursor: pointer; text-align: left; transition: .15s; position: relative; }
+  .card:hover { border-color: #a0703a; }
+  .card.sel { border-color: #e8b04a; box-shadow: 0 0 16px #e8b04a55; background: #3a1d18; }
+  .card.locked { opacity: .35; cursor: not-allowed; }
+  .card b { font-size: 17px; display: block; margin-bottom: 4px; }
+  .card small { color: #c9b39a; line-height: 1.45; display: block; }
+  .dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+  .banner { height: 6px; border-radius: 4px; margin: -4px 0 10px; }
+
+  /* Karakter seçme */
+  .slots { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .slot { min-height: 150px; display: flex; flex-direction: column; justify-content: center; text-align: center; }
+  .slot .av { width: 56px; height: 56px; border-radius: 50%; margin: 0 auto 8px; border: 3px solid #0008; }
+  .slot.empty { border-style: dashed; color: #a88d74; font-size: 15px; }
+  .slot .del { position: absolute; top: 6px; right: 8px; background: none; border: 0; color: #a88d74; font-size: 18px; cursor: pointer; }
+  .slot .del:hover { color: #ff6a5a; }
+  .topline { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; color: #c9a98a; font-size: 14px; }
 
   /* HUD */
   #hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
@@ -53,12 +71,13 @@
   .sk .cdt { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: bold; }
   #info { position: absolute; left: 12px; top: 10px; font-size: 13px; text-shadow: 0 1px 2px #000; line-height: 1.5; }
   #info .zone { font-weight: bold; }
+  #exit { position: absolute; left: 12px; top: 92px; pointer-events: auto; background: #0009; color: #c9a98a; border: 1px solid #6b4a2a; border-radius: 8px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
   #board { position: absolute; right: 12px; top: 10px; background: #0009; border-radius: 10px; padding: 8px 12px; font-size: 13px; min-width: 170px; }
   #board h4 { margin: 0 0 4px; color: #e8b04a; font-size: 13px; }
   #boardList div { display: flex; justify-content: space-between; gap: 10px; }
   #feed { position: absolute; right: 12px; top: 150px; font-size: 13px; text-align: right; text-shadow: 0 1px 2px #000; }
   #feed div { background: #0007; padding: 3px 8px; border-radius: 6px; margin-bottom: 3px; }
-  #mini { position: absolute; right: 12px; bottom: 14px; width: 180px; height: 120px; border: 2px solid #6b4a2a; border-radius: 8px; background: #0008; }
+  #mini { position: absolute; right: 12px; bottom: 14px; width: 180px; height: 144px; border: 2px solid #6b4a2a; border-radius: 8px; background: #0008; }
   #chat { position: absolute; left: 12px; bottom: 14px; width: min(340px, 40vw); font-size: 13px; }
   #chatlog { max-height: 160px; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; text-shadow: 0 1px 2px #000; }
   #chatlog div { padding: 1px 0; word-wrap: break-word; }
@@ -68,6 +87,8 @@
   #death { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column;
     background: #3a0000aa; z-index: 10; text-align: center; padding: 16px; }
   #death h2 { font-size: 44px; margin: 0; color: #ff6a5a; text-shadow: 0 2px 0 #000; }
+  #toast { position: fixed; top: 22%; left: 50%; transform: translateX(-50%); z-index: 8; text-align: center; pointer-events: none;
+    font-size: clamp(18px, 4vw, 28px); font-weight: bold; color: #e8b04a; text-shadow: 0 2px 6px #000; transition: opacity .6s; opacity: 0; }
 
   /* Dokunmatik kontroller */
   #touch { position: fixed; inset: 0; z-index: 6; pointer-events: none; }
@@ -84,44 +105,83 @@
   body.touch #chat { width: 55vw; bottom: auto; top: 60px; left: 12px; }
   body.touch #chatlog { max-height: 90px; font-size: 12px; }
   body.touch #chatin { display: none; }
-  body.touch.chatting #chatin { display: block; }
   body.touch #board { font-size: 11px; min-width: 130px; padding: 6px 8px; }
   body.touch #feed { top: 175px; font-size: 11px; }
   body.touch #info { font-size: 11px; top: 6px; }
+  body.touch #exit { top: 74px; }
   @media (max-height: 500px) { body.touch #chat { display: none; } #feed { display: none; } }
 </style>
 </head>
 <body>
 <canvas id="game"></canvas>
 
-<div id="login">
+<!-- 1) GİRİŞ / KAYIT -->
+<div id="scrAuth" class="screen">
   <div class="panel">
     <h1>PvP SERVER</h1>
-    <div class="sub">Kılıç, gölge ve ruh. Arenanın efendisi kim olacak?</div>
-    <div class="classes">
-      <div class="cls sel" data-c="savasci"><b><span class="dot" style="background:#d9534f"></span>Savaşçı</b>
-        <small>Dayanıklı yakın dövüşçü.<br>Q: Hamle (ileri atılır, çarptığına vurur)<br>E: Demir Kalkan (%50 az hasar)</small></div>
-      <div class="cls" data-c="golge"><b><span class="dot" style="background:#9b59b6"></span>Gölge Avcı</b>
-        <small>Hızlı ve ölümcül suikastçı.<br>Q: Zehirli Hançer (fırlatır, zehirler)<br>E: Gölge Örtüsü (4 sn görünmez)</small></div>
-      <div class="cls" data-c="buyucu"><b><span class="dot" style="background:#3498db"></span>Ruh Büyücüsü</b>
-        <small>Uzaktan saldıran büyücü.<br>Q: Alev Küresi (alan hasarı)<br>E: Şifa Işığı (can yeniler)</small></div>
+    <div class="sub">Üç krallık, tek vadi. Efendisi kim olacak?</div>
+    <div class="box">
+      <div class="tabs"><button id="tabLogin" class="on">Giriş Yap</button><button id="tabReg">Kayıt Ol</button></div>
+      <input class="txt" id="aUser" maxlength="16" placeholder="Kullanıcı adı" autocomplete="username">
+      <input class="txt" id="aPass" type="password" maxlength="64" placeholder="Şifre" autocomplete="current-password">
+      <input class="txt hidden" id="aPass2" type="password" maxlength="64" placeholder="Şifre (tekrar)" autocomplete="new-password">
+      <button class="big" id="aGo">GİRİŞ YAP</button>
+      <div class="msg" id="aMsg"></div>
     </div>
-    <input id="name" maxlength="14" placeholder="Karakter adın" autocomplete="off">
-    <button class="big" id="play">OYUNA GİR</button>
-    <div id="status"></div>
-    <div class="help" id="helpPc">WASD / Ok tuşları: Hareket · Fare: Nişan · Sol tık / Boşluk: Saldırı · Q, E: Beceriler · Enter: Sohbet<br>
-      Köy güvenli bölgedir: orada kimse hasar alamaz ve can hızla dolar.</div>
-    <div class="help hidden" id="helpTouch">Sol joystick: Hareket · Sağ tuşlar: Saldırı ve beceriler (en yakın düşmana otomatik nişan alınır)<br>
-      Köy güvenli bölgedir: orada kimse hasar alamaz.</div>
+  </div>
+</div>
+
+<!-- 2) KARAKTER SEÇ -->
+<div id="scrSelect" class="screen hidden">
+  <div class="panel">
+    <h2>KARAKTER SEÇ</h2>
+    <div class="topline"><span id="sAcc"></span><button class="link" id="sLogout" style="margin:0">Çıkış yap</button></div>
+    <div class="slots" id="slots"></div>
+    <button class="big" id="sPlay" style="max-width:320px" disabled>OYUNA GİR</button>
+    <div class="msg" id="sMsg"></div>
+  </div>
+</div>
+
+<!-- 3) KARAKTER OLUŞTUR -->
+<div id="scrCreate" class="screen hidden">
+  <div class="panel">
+    <h2>YENİ KARAKTER</h2>
+    <h3>1. Krallığını seç</h3>
+    <div class="grid" id="factions">
+      <div class="card" data-f="kizil"><div class="banner" style="background:#e04a3a"></div><b><span class="dot" style="background:#e04a3a"></span>Kızıl Ejder</b>
+        <small>Kuzeybatının ateşli savaşçıları. Onur ve öfkeyle savaşırlar.</small></div>
+      <div class="card" data-f="gok"><div class="banner" style="background:#3a8de0"></div><b><span class="dot" style="background:#3a8de0"></span>Gök Kaplan</b>
+        <small>Kuzeydoğunun dağ halkı. Sabırlı, disiplinli ve acımasız.</small></div>
+      <div class="card" data-f="yesim"><div class="banner" style="background:#3ac06a"></div><b><span class="dot" style="background:#3ac06a"></span>Yeşim Turna</b>
+        <small>Güney ovalarının bilge klanı. Kurnaz ve çevik.</small></div>
+    </div>
+    <div class="msg" id="cFactionNote" style="color:#c9a98a"></div>
+    <h3>2. Sınıfını seç</h3>
+    <div class="grid" id="classes">
+      <div class="card" data-c="savasci"><b><span class="dot" style="background:#d9534f"></span>Savaşçı</b>
+        <small>Dayanıklı yakın dövüşçü.<br>Q: Hamle · E: Demir Kalkan</small></div>
+      <div class="card" data-c="golge"><b><span class="dot" style="background:#9b59b6"></span>Gölge Avcı</b>
+        <small>Hızlı ve ölümcül suikastçı.<br>Q: Zehirli Hançer · E: Gölge Örtüsü</small></div>
+      <div class="card" data-c="buyucu"><b><span class="dot" style="background:#3498db"></span>Ruh Büyücüsü</b>
+        <small>Uzaktan saldıran büyücü.<br>Q: Alev Küresi · E: Şifa Işığı</small></div>
+    </div>
+    <h3>3. Adını yaz</h3>
+    <div style="max-width:320px;margin:0 auto">
+      <input class="txt" id="cName" maxlength="14" placeholder="Karakter adı" autocomplete="off">
+      <button class="big" id="cGo">KARAKTERİ OLUŞTUR</button>
+      <button class="link" id="cBack">← Geri</button>
+      <div class="msg" id="cMsg"></div>
+    </div>
   </div>
 </div>
 
 <div id="hud" class="hidden">
   <div id="info"></div>
+  <button id="exit">⟵ Karakter seç</button>
   <div id="board"><h4>🏆 EN İYİLER</h4><div id="boardList"></div></div>
   <div id="feed"></div>
   <div id="chat"><div id="chatlog"></div><input id="chatin" maxlength="120" placeholder="Mesaj yaz, Enter ile gönder"></div>
-  <canvas id="mini" width="180" height="120"></canvas>
+  <canvas id="mini" width="180" height="144"></canvas>
   <div id="bars">
     <div id="skills">
       <div class="sk" id="skA"><b>Tık</b><span>Saldırı</span><div class="cdo"></div><div class="cdt"></div></div>
@@ -143,6 +203,7 @@
 </div>
 
 <div id="death" class="hidden"><h2>ÖLDÜN</h2><p id="deathMsg"></p></div>
+<div id="toast"></div>
 
 <script src="config.js"></script>
 <script src="client.js"></script>

@@ -2,25 +2,30 @@
 
 Tarayıcıda, telefonda ve bilgisayarda oynanan çok oyunculu PvP oyunu.
 
+## Özellikler
+- Hesap sistemi (kayıt / giriş, otomatik giriş), hesap başına 3 karakter
+- 3 krallık: Kızıl Ejder, Gök Kaplan, Yeşim Turna. Her birinin kendi köyü var, aynı krallıktakiler birbirine vuramaz
+- 3 sınıf: Savaşçı, Gölge Avcı, Ruh Büyücüsü
+- Seviye sistemi (30'a kadar), sıralama tablosu, sohbet, mini harita
+- Telefon için dokunmatik kontroller
+
 ## Bilgisayarında çalıştırma
 ```
 npm install
 npm start
 ```
-Sonra tarayıcıda http://localhost:3000 adresini aç.
+Sonra http://localhost:3000 adresini aç. Kayıtlar `data/db.json` dosyasına yazılır.
+
+## İnternette (Render) kalıcı kayıt
+Render'ın ücretsiz planında dosyalar her yeniden başlatmada silinir. Kalıcı kayıt için
+bir PostgreSQL veritabanı (örneğin Neon, ücretsiz) aç ve bağlantı adresini Render'da
+`DATABASE_URL` ortam değişkenine yaz. Sunucu tabloyu kendisi oluşturur.
 
 ## Kontroller
-- **PC:** WASD hareket, fare nişan, sol tık veya Boşluk saldırı, Q ve E beceriler, Enter sohbet
-- **Telefon:** solda joystick, sağda SALDIR / Q / E tuşları (en yakın düşmana otomatik nişan)
-
-## Sınıflar
-| Sınıf | Q | E |
-|---|---|---|
-| Savaşçı | Hamle | Demir Kalkan |
-| Gölge Avcı | Zehirli Hançer | Gölge Örtüsü (görünmezlik) |
-| Ruh Büyücüsü | Alev Küresi | Şifa Işığı |
+- **PC:** WASD hareket, fare nişan, sol tık / Boşluk saldırı, Q ve E beceriler, Enter sohbet
+- **Telefon:** solda joystick, sağda SALDIR / Q / E (en yakın düşmana otomatik nişan)
 
 ## Dosyalar
-- `server.js`: oyun sunucusu (bütün hesaplar burada yapılır, hile koruması)
-- `public/client.js`: oyun ekranı
-- `public/config.js`: telefon/PC sürümleri için sunucu adresi
+- `server.js`: oyun sunucusu ve hesap sistemi
+- `db.js`: veritabanı (PostgreSQL veya dosya)
+- `public/`: oyun ekranı
