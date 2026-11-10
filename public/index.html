@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#1a0f0f">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg">
+<title>PvP Server</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #120b0b; color: #f3e9d2; font-family: 'Segoe UI', Tahoma, sans-serif; touch-action: none; }
+  canvas#game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  .hidden { display: none !important; }
+
+  /* Giriş ekranı */
+  #login { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px;
+    background: radial-gradient(circle at 50% 30%, #4a1414 0%, #1a0b0b 60%, #0b0606 100%); z-index: 20; overflow-y: auto; }
+  .panel { width: 100%; max-width: 720px; text-align: center; }
+  h1 { font-size: clamp(34px, 8vw, 60px); margin: 0 0 4px; letter-spacing: 3px; color: #e8b04a;
+    text-shadow: 0 0 18px #b3261e, 0 3px 0 #5a1010; }
+  .sub { color: #c9a98a; margin-bottom: 22px; }
+  .classes { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 18px; }
+  .cls { background: #2a1614cc; border: 2px solid #5a3a2a; border-radius: 12px; padding: 14px; cursor: pointer; text-align: left; transition: .15s; }
+  .cls:hover { border-color: #a0703a; }
+  .cls.sel { border-color: #e8b04a; box-shadow: 0 0 16px #e8b04a55; background: #3a1d18; }
+  .cls b { font-size: 18px; display: block; margin-bottom: 4px; }
+  .cls .dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+  .cls small { color: #c9b39a; line-height: 1.45; display: block; }
+  input#name { width: 100%; max-width: 320px; padding: 12px 14px; font-size: 17px; border-radius: 10px; border: 2px solid #5a3a2a;
+    background: #1e100e; color: #f3e9d2; outline: none; user-select: text; -webkit-user-select: text; }
+  input#name:focus { border-color: #e8b04a; }
+  button.big { display: block; margin: 14px auto 0; padding: 13px 40px; font-size: 19px; font-weight: bold; border: 0; border-radius: 10px;
+    background: linear-gradient(#e8b04a, #b3741e); color: #2a1206; cursor: pointer; box-shadow: 0 4px 0 #6b3d0e; }
+  button.big:active { transform: translateY(2px); box-shadow: 0 2px 0 #6b3d0e; }
+  .help { margin-top: 18px; color: #a88d74; font-size: 13px; line-height: 1.6; }
+  #status { margin-top: 10px; color: #ff8a7a; min-height: 20px; }
+
+  /* HUD */
+  #hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
+  #bars { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); width: min(420px, 92vw); }
+  .bar { height: 16px; background: #000a; border: 1px solid #0008; border-radius: 8px; overflow: hidden; margin-top: 4px; position: relative; }
+  .bar i { display: block; height: 100%; transition: width .1s; }
+  .bar span { position: absolute; inset: 0; font-size: 11px; line-height: 16px; text-align: center; text-shadow: 0 1px 2px #000; }
+  #hpb i { background: linear-gradient(#e0473c, #9a1d16); }
+  #mpb i { background: linear-gradient(#4a8de0, #1d4f9a); }
+  #xpb { height: 8px; } #xpb i { background: #e8b04a; } #xpb span { display: none; }
+  #skills { display: flex; justify-content: center; gap: 8px; margin-bottom: 6px; }
+  .sk { width: 54px; height: 54px; border-radius: 10px; background: #1e100ed9; border: 2px solid #6b4a2a; position: relative; overflow: hidden;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 10px; text-align: center; }
+  .sk b { font-size: 15px; color: #e8b04a; }
+  .sk .cdo { position: absolute; left: 0; bottom: 0; width: 100%; background: #000b; }
+  .sk .cdt { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: bold; }
+  #info { position: absolute; left: 12px; top: 10px; font-size: 13px; text-shadow: 0 1px 2px #000; line-height: 1.5; }
+  #info .zone { font-weight: bold; }
+  #board { position: absolute; right: 12px; top: 10px; background: #0009; border-radius: 10px; padding: 8px 12px; font-size: 13px; min-width: 170px; }
+  #board h4 { margin: 0 0 4px; color: #e8b04a; font-size: 13px; }
+  #boardList div { display: flex; justify-content: space-between; gap: 10px; }
+  #feed { position: absolute; right: 12px; top: 150px; font-size: 13px; text-align: right; text-shadow: 0 1px 2px #000; }
+  #feed div { background: #0007; padding: 3px 8px; border-radius: 6px; margin-bottom: 3px; }
+  #mini { position: absolute; right: 12px; bottom: 14px; width: 180px; height: 120px; border: 2px solid #6b4a2a; border-radius: 8px; background: #0008; }
+  #chat { position: absolute; left: 12px; bottom: 14px; width: min(340px, 40vw); font-size: 13px; }
+  #chatlog { max-height: 160px; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; text-shadow: 0 1px 2px #000; }
+  #chatlog div { padding: 1px 0; word-wrap: break-word; }
+  #chatlog .sys { color: #e8b04a; }
+  #chatin { width: 100%; margin-top: 4px; padding: 7px 10px; border-radius: 8px; border: 1px solid #6b4a2a; background: #000c; color: #fff;
+    outline: none; pointer-events: auto; user-select: text; -webkit-user-select: text; }
+  #death { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column;
+    background: #3a0000aa; z-index: 10; text-align: center; padding: 16px; }
+  #death h2 { font-size: 44px; margin: 0; color: #ff6a5a; text-shadow: 0 2px 0 #000; }
+
+  /* Dokunmatik kontroller */
+  #touch { position: fixed; inset: 0; z-index: 6; pointer-events: none; }
+  #joy { position: absolute; left: 30px; bottom: 120px; width: 130px; height: 130px; border-radius: 50%; background: #ffffff14; border: 2px solid #ffffff30; pointer-events: auto; }
+  #knob { position: absolute; left: 40px; top: 40px; width: 50px; height: 50px; border-radius: 50%; background: #e8b04a99; }
+  .tb { position: absolute; border-radius: 50%; background: #1e100ecc; border: 2px solid #e8b04a; color: #e8b04a; font-weight: bold;
+    display: flex; align-items: center; justify-content: center; pointer-events: auto; font-size: 14px; text-align: center; }
+  .tb.on { background: #e8b04a55; }
+  #tAtk { right: 30px; bottom: 120px; width: 90px; height: 90px; font-size: 16px; }
+  #tQ { right: 135px; bottom: 110px; width: 62px; height: 62px; }
+  #tE { right: 150px; bottom: 195px; width: 62px; height: 62px; }
+  #tChat { left: 50%; top: 10px; transform: translateX(-50%); width: 44px; height: 44px; font-size: 18px; border-radius: 10px; }
+  body.touch #skills, body.touch #mini { display: none; }
+  body.touch #chat { width: 55vw; bottom: auto; top: 60px; left: 12px; }
+  body.touch #chatlog { max-height: 90px; font-size: 12px; }
+  body.touch #chatin { display: none; }
+  body.touch.chatting #chatin { display: block; }
+  body.touch #board { font-size: 11px; min-width: 130px; padding: 6px 8px; }
+  body.touch #feed { top: 175px; font-size: 11px; }
+  body.touch #info { font-size: 11px; top: 6px; }
+  @media (max-height: 500px) { body.touch #chat { display: none; } #feed { display: none; } }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="login">
+  <div class="panel">
+    <h1>PvP SERVER</h1>
+    <div class="sub">Kılıç, gölge ve ruh. Arenanın efendisi kim olacak?</div>
+    <div class="classes">
+      <div class="cls sel" data-c="savasci"><b><span class="dot" style="background:#d9534f"></span>Savaşçı</b>
+        <small>Dayanıklı yakın dövüşçü.<br>Q: Hamle (ileri atılır, çarptığına vurur)<br>E: Demir Kalkan (%50 az hasar)</small></div>
+      <div class="cls" data-c="golge"><b><span class="dot" style="background:#9b59b6"></span>Gölge Avcı</b>
+        <small>Hızlı ve ölümcül suikastçı.<br>Q: Zehirli Hançer (fırlatır, zehirler)<br>E: Gölge Örtüsü (4 sn görünmez)</small></div>
+      <div class="cls" data-c="buyucu"><b><span class="dot" style="background:#3498db"></span>Ruh Büyücüsü</b>
+        <small>Uzaktan saldıran büyücü.<br>Q: Alev Küresi (alan hasarı)<br>E: Şifa Işığı (can yeniler)</small></div>
+    </div>
+    <input id="name" maxlength="14" placeholder="Karakter adın" autocomplete="off">
+    <button class="big" id="play">OYUNA GİR</button>
+    <div id="status"></div>
+    <div class="help" id="helpPc">WASD / Ok tuşları: Hareket · Fare: Nişan · Sol tık / Boşluk: Saldırı · Q, E: Beceriler · Enter: Sohbet<br>
+      Köy güvenli bölgedir: orada kimse hasar alamaz ve can hızla dolar.</div>
+    <div class="help hidden" id="helpTouch">Sol joystick: Hareket · Sağ tuşlar: Saldırı ve beceriler (en yakın düşmana otomatik nişan alınır)<br>
+      Köy güvenli bölgedir: orada kimse hasar alamaz.</div>
+  </div>
+</div>
+
+<div id="hud" class="hidden">
+  <div id="info"></div>
+  <div id="board"><h4>🏆 EN İYİLER</h4><div id="boardList"></div></div>
+  <div id="feed"></div>
+  <div id="chat"><div id="chatlog"></div><input id="chatin" maxlength="120" placeholder="Mesaj yaz, Enter ile gönder"></div>
+  <canvas id="mini" width="180" height="120"></canvas>
+  <div id="bars">
+    <div id="skills">
+      <div class="sk" id="skA"><b>Tık</b><span>Saldırı</span><div class="cdo"></div><div class="cdt"></div></div>
+      <div class="sk" id="skQ"><b>Q</b><span></span><div class="cdo"></div><div class="cdt"></div></div>
+      <div class="sk" id="skE"><b>E</b><span></span><div class="cdo"></div><div class="cdt"></div></div>
+    </div>
+    <div class="bar" id="hpb"><i></i><span></span></div>
+    <div class="bar" id="mpb"><i></i><span></span></div>
+    <div class="bar" id="xpb"><i></i><span></span></div>
+  </div>
+</div>
+
+<div id="touch" class="hidden">
+  <div id="joy"><div id="knob"></div></div>
+  <div class="tb" id="tAtk">SALDIR</div>
+  <div class="tb" id="tQ">Q</div>
+  <div class="tb" id="tE">E</div>
+  <div class="tb" id="tChat">💬</div>
+</div>
+
+<div id="death" class="hidden"><h2>ÖLDÜN</h2><p id="deathMsg"></p></div>
+
+<script src="config.js"></script>
+<script src="client.js"></script>
+</body>
+</html>

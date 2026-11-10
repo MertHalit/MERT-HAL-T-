@@ -1,0 +1,10 @@
+{
+  "name": "PvP Server",
+  "short_name": "PvP Server",
+  "start_url": "./",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#120b0b",
+  "theme_color": "#1a0f0f",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
