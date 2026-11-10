@@ -36,6 +36,7 @@
   button.link { background: none; border: 0; color: #c9a98a; text-decoration: underline; cursor: pointer; font-size: 14px; margin-top: 14px; }
   .msg { margin-top: 10px; color: #ff8a7a; min-height: 20px; font-size: 14px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+  #classes { grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); }
   .card { background: #2a1614cc; border: 2px solid #5a3a2a; border-radius: 12px; padding: 14px; cursor: pointer; text-align: left; transition: .15s; position: relative; }
   .card:hover { border-color: #a0703a; }
   .card.sel { border-color: #e8b04a; box-shadow: 0 0 16px #e8b04a55; background: #3a1d18; }
@@ -67,6 +68,9 @@
   .sk { width: 54px; height: 54px; border-radius: 10px; background: #1e100ed9; border: 2px solid #6b4a2a; position: relative; overflow: hidden;
     display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 10px; text-align: center; }
   .sk b { font-size: 15px; color: #e8b04a; }
+  .sk span { line-height: 1.1; padding: 0 2px; }
+  #buffs { display: flex; justify-content: center; gap: 4px; margin-bottom: 4px; min-height: 0; }
+  #buffs div { font-size: 11px; background: #000b; border: 1px solid #e8b04a88; border-radius: 6px; padding: 2px 6px; white-space: nowrap; }
   .sk .cdo { position: absolute; left: 0; bottom: 0; width: 100%; background: #000b; }
   .sk .cdt { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: bold; }
   #info { position: absolute; left: 12px; top: 10px; font-size: 13px; text-shadow: 0 1px 2px #000; line-height: 1.5; }
@@ -98,8 +102,12 @@
     display: flex; align-items: center; justify-content: center; pointer-events: auto; font-size: 14px; text-align: center; }
   .tb.on { background: #e8b04a55; }
   #tAtk { right: 30px; bottom: 120px; width: 90px; height: 90px; font-size: 16px; }
-  #tQ { right: 135px; bottom: 110px; width: 62px; height: 62px; }
-  #tE { right: 150px; bottom: 195px; width: 62px; height: 62px; }
+  #tQ { right: 134px; bottom: 62px; width: 56px; height: 56px; }
+  #tE { right: 146px; bottom: 138px; width: 56px; height: 56px; }
+  #tR { right: 102px; bottom: 202px; width: 56px; height: 56px; }
+  #tF { right: 26px; bottom: 212px; width: 56px; height: 56px; }
+  body.touch #boardList div:nth-child(n+4) { display: none; }
+  body.touch #toast { font-size: 18px; top: 30%; }
   #tChat { left: 50%; top: 10px; transform: translateX(-50%); width: 44px; height: 44px; font-size: 18px; border-radius: 10px; }
   body.touch #skills, body.touch #mini { display: none; }
   body.touch #chat { width: 55vw; bottom: auto; top: 60px; left: 12px; }
@@ -159,11 +167,13 @@
     <h3>2. Sınıfını seç</h3>
     <div class="grid" id="classes">
       <div class="card" data-c="savasci"><b><span class="dot" style="background:#d9534f"></span>Savaşçı</b>
-        <small>Dayanıklı yakın dövüşçü.<br>Q: Hamle · E: Demir Kalkan</small></div>
+        <small>Dayanıklı yakın dövüşçü, kalabalığa dalar.<br>Kılıç Kasırgası · Öfke Aurası · Hamle · Demir Kalkan</small></div>
       <div class="card" data-c="golge"><b><span class="dot" style="background:#9b59b6"></span>Gölge Avcı</b>
-        <small>Hızlı ve ölümcül suikastçı.<br>Q: Zehirli Hançer · E: Gölge Örtüsü</small></div>
-      <div class="card" data-c="buyucu"><b><span class="dot" style="background:#3498db"></span>Ruh Büyücüsü</b>
-        <small>Uzaktan saldıran büyücü.<br>Q: Alev Küresi · E: Şifa Işığı</small></div>
+        <small>Hızlı suikastçı, arkadan vurursa ölümcül.<br>Zehirli Hançer · Gölge Örtüsü · Sinsi Darbe · Geri Sıçrama</small></div>
+      <div class="card" data-c="buyucu"><b><span class="dot" style="background:#3498db"></span>Ruh Kılıcı</b>
+        <small>Kılıçla büyüyü birleştiren savaşçı, vurdukça iyileşir.<br>Ruh Kılıcı · Alev Küresi · Kara Dalga · Şifa Işığı</small></div>
+      <div class="card" data-c="saman"><b><span class="dot" style="background:#1abc9c"></span>Şaman</b>
+        <small>Dostlarını güçlendiren destek büyücüsü.<br>Şimşek · Turna Kutsaması · Şifa Yağmuru · Rüzgâr Adımı</small></div>
     </div>
     <h3>3. Adını yaz</h3>
     <div style="max-width:320px;margin:0 auto">
@@ -187,7 +197,10 @@
       <div class="sk" id="skA"><b>Tık</b><span>Saldırı</span><div class="cdo"></div><div class="cdt"></div></div>
       <div class="sk" id="skQ"><b>Q</b><span></span><div class="cdo"></div><div class="cdt"></div></div>
       <div class="sk" id="skE"><b>E</b><span></span><div class="cdo"></div><div class="cdt"></div></div>
+      <div class="sk" id="skR"><b>R</b><span></span><div class="cdo"></div><div class="cdt"></div></div>
+      <div class="sk" id="skF"><b>F</b><span></span><div class="cdo"></div><div class="cdt"></div></div>
     </div>
+    <div id="buffs"></div>
     <div class="bar" id="hpb"><i></i><span></span></div>
     <div class="bar" id="mpb"><i></i><span></span></div>
     <div class="bar" id="xpb"><i></i><span></span></div>
@@ -199,6 +212,8 @@
   <div class="tb" id="tAtk">SALDIR</div>
   <div class="tb" id="tQ">Q</div>
   <div class="tb" id="tE">E</div>
+  <div class="tb" id="tR">R</div>
+  <div class="tb" id="tF">F</div>
   <div class="tb" id="tChat">💬</div>
 </div>
 

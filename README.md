@@ -5,7 +5,7 @@ Tarayıcıda, telefonda ve bilgisayarda oynanan çok oyunculu PvP oyunu.
 ## Özellikler
 - Hesap sistemi (kayıt / giriş, otomatik giriş), hesap başına 3 karakter
 - 3 krallık: Kızıl Ejder, Gök Kaplan, Yeşim Turna. Her birinin kendi köyü var, aynı krallıktakiler birbirine vuramaz
-- 3 sınıf: Savaşçı, Gölge Avcı, Ruh Büyücüsü
+- 4 sınıf (her biri 4 beceri): Savaşçı, Gölge Avcı, Ruh Kılıcı, Şaman
 - Seviye sistemi (30'a kadar), sıralama tablosu, sohbet, mini harita
 - Telefon için dokunmatik kontroller
 

@@ -28,3 +28,33 @@
 - **Paket sınırlayıcı (token bucket):** Her mesaj türünün saniyelik bir sınırı vardır.
 - **İhlal puanı:** Hız sınırı aşma, bozuk paket gibi davranışlar puan biriktirir. Puan zamanla azalır, 60'ı geçerse oyuncu atılır ve `security_log` tablosuna kayıt düşülür.
 - **Giriş güvenliği:** scrypt ile şifre özeti, sabit süreli karşılaştırma, 5 hatalı denemede 30 saniye bekleme, engelli hesap kontrolü.
+
+# Aşama 2: Sınıflar ve Yetenek Sistemi
+
+## Yetenek sistemi (`server.js`, Unreal GAS mantığının karşılığı)
+- **Beceri tanımı:** ad, mana maliyeti, bekleme süresi, açıklama ve sunucuda çalışan `cast()`. Her sınıfta Q/E/R/F tuşlarında 4 beceri var.
+- **Etkiler (buff/debuff):** `{ id, until, mods }` biçiminde. `mods` alanları: `atk` (saldırı gücü), `taken` (alınan hasar), `crit` (kritik şansı), `speed` (hız), `lifesteal` (can çalma). Aynı etki üst üste binmez, süresi yenilenir.
+- **Durumlar:** sersemleme (`stunUntil`: hareket, saldırı ve beceri kullanılamaz), görünmezlik (`iv` etkisi, saldırınca bozulur), zehir.
+- **Zamanlanmış adımlar (`timers`):** kombo becerilerinin vuruşları sırayla, sunucu saatiyle çalışır. Unreal'daki AnimMontage bildirimlerinin karşılığı.
+- **Hasar akışı:** saldırı gücü → pusu bonusu → kritik (×1.6) → hedefin hasar azaltması → can çalma → geri savurma → sersemletme.
+
+## Vuruş tespiti (hedef seçmeden)
+- `hitCone(p, menzil, açı)`: karakterin baktığı yöndeki koni. Normal saldırılar, Kara Dalga ve Sinsi Darbe bunu kullanır.
+- `hitCircle(x, y, yarıçap)`: 360° alan. Kılıç Kasırgası ve Alev Küresi patlaması bunu kullanır.
+- `isBehind(saldıran, hedef)`: hedefin baktığı yöne göre 110°'den geniş açı varsa saldıran arkada sayılır (Sinsi Darbe ×2.5).
+- Hepsi AoI ızgarasından sadece yakındaki hedefleri çeker.
+
+## Geri savurma ve sersemletme
+- Savurma, vuran kişiden hedefe doğru bir hız olarak uygulanır ve her adımda %18 sönümlenir. Kayaya çarpınca durur (çarpışma çözümü).
+- Oyunculara savurmanın %50'si, sersemletmenin %70'i uygulanır (PvP dengesi). Canavarlara (Aşama 3) tam uygulanacak.
+- Hareket denetçisi savurma hızını izin verilen hıza ekler, yani savrulan oyuncu hile şüphesiyle işaretlenmez.
+
+## Sınıflar
+| Sınıf | Q | E | R | F |
+|---|---|---|---|---|
+| Savaşçı | Kılıç Kasırgası (360°, 3 vuruş) | Öfke Aurası (+%30 saldırı) | Hamle (sersemletir) | Demir Kalkan (-%50 hasar) |
+| Gölge Avcı | Zehirli Hançer | Gölge Örtüsü (görünmezlik, ilk vuruş ×1.5) | Sinsi Darbe (arkadan ×2.5) | Geri Sıçrama |
+| Ruh Kılıcı | Ruh Kılıcı (%12 can çalma) | Alev Küresi | Kara Dalga (koni, savurma) | Şifa Işığı |
+| Şaman | Şimşek (sersemletir) | Turna Kutsaması (dostlara +%25 kritik) | Şifa Yağmuru | Rüzgâr Adımı (+%30 hız) |
+
+Şamanın alan güçlendirmeleri şimdilik yakındaki aynı krallık oyuncularına uygulanıyor. Parti sistemi gelince partiye bağlanacak.

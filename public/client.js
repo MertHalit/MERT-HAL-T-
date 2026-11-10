@@ -20,13 +20,17 @@ const FACTION_UI = {
 const CLASS_UI = {
   savasci: { name: 'Savaşçı', color: '#d9534f' },
   golge: { name: 'Gölge Avcı', color: '#9b59b6' },
-  buyucu: { name: 'Ruh Büyücüsü', color: '#3498db' },
+  buyucu: { name: 'Ruh Kılıcı', color: '#3498db' },
+  saman: { name: 'Şaman', color: '#1abc9c' },
 };
 
 let ws = null, myId = null, myFaction = null, MAP = null, CLASSES = null, FACTIONS = FACTION_UI, state = null;
 let account = null, selectedChar = null;
 const view = new Map(); // yumuşak hareket için çizim konumları
-let floaters = [], swings = [], booms = [], board = [];
+let floaters = [], swings = [], booms = [], rings = [], board = [];
+const SKILL_KEYS = ['q', 'e', 'r', 'f'];
+const FX_NAMES = { atk: 'Öfke Aurası', sh: 'Demir Kalkan', iv: 'Görünmez', ls: 'Ruh Kılıcı', crit: 'Turna Kutsaması', spd: 'Rüzgâr Adımı' };
+const FX_COLORS = { atk: '#ff5a3a', sh: '#7ab8ff', iv: '#b07ad8', ls: '#c44aff', crit: '#ffd04a', spd: '#7affd0' };
 let deadUntil = 0, deathBy = '';
 let W = 0, H = 0, DPR = 1;
 
@@ -206,12 +210,16 @@ function handle(m) {
     alert(m.msg);
   } else if (m.t === 'welcome') {
     myId = m.id; MAP = m.map; CLASSES = m.classes; FACTIONS = m.factions; myFaction = m.me.f;
-    floaters = []; swings = []; booms = []; board = [];
+    floaters = []; swings = []; booms = []; rings = []; board = [];
     $('#chatlog').innerHTML = ''; $('#feed').innerHTML = '';
     show('game');
     const c = CLASSES[m.me.cls];
-    $('#skQ span').textContent = c.q.name;
-    $('#skE span').textContent = c.e.name;
+    for (const k of SKILL_KEYS) {
+      const s = c.skills[k];
+      const el = $('#sk' + k.toUpperCase());
+      el.querySelector('span').textContent = s.name;
+      el.title = `${s.name} (${s.mp} mana, ${s.cd} sn)\n${s.desc}`;
+    }
     toast(`${FACTIONS[myFaction].name}'na hoş geldin!`);
     addChat('Köyün dışındaki kuklalarla antrenman yap, sonra düşman krallıkları avla!', true);
     addChat('Kendi krallığından oyunculara vuramazsın. Köyler güvenli bölgedir.', true);
@@ -248,9 +256,14 @@ function toast(text) {
 
 function onEvent(ev) {
   const t = performance.now();
-  if (ev.t === 'dmg') floaters.push({ x: ev.x + (Math.random() * 20 - 10), y: ev.y - 30, txt: '-' + ev.v, col: '#ff5a4a', t });
-  else if (ev.t === 'heal') floaters.push({ x: ev.x, y: ev.y - 30, txt: '+ŞİFA', col: '#6aff7a', t });
-  else if (ev.t === 'swing') swings.push({ id: ev.id, a: ev.a, r: ev.r, t });
+  if (ev.t === 'dmg') {
+    const txt = (ev.bs ? 'ARKADAN! ' : '') + (ev.c ? 'KRİTİK ' : '') + '-' + ev.v;
+    floaters.push({ x: ev.x + (Math.random() * 20 - 10), y: ev.y - 30, txt, col: ev.bs ? '#ff3aff' : ev.c ? '#ffd04a' : '#ff5a4a', t, big: ev.c || ev.bs });
+  } else if (ev.t === 'heal') floaters.push({ x: ev.x, y: ev.y - 30, txt: '+' + (ev.v || ''), col: '#6aff7a', t });
+  else if (ev.t === 'swing') swings.push({ id: ev.id, a: ev.a, r: ev.r, t, s: ev.s });
+  else if (ev.t === 'spin') rings.push({ kind: 'spin', id: ev.id, x: ev.x, y: ev.y, r: ev.r, t, dur: 220 });
+  else if (ev.t === 'wave') rings.push({ kind: 'wave', x: ev.x, y: ev.y, r: ev.r, a: ev.a, arc: ev.arc, t, dur: 350 });
+  else if (ev.t === 'buff') rings.push({ kind: 'buff', id: ev.id, x: ev.x, y: ev.y, r: 40, col: FX_COLORS[ev.b] || '#fff', t, dur: 600 });
   else if (ev.t === 'boom') booms.push({ x: ev.x, y: ev.y, t });
   else if (ev.t === 'kill') addFeed(ev);
   else if (ev.t === 'lvl') {
@@ -307,7 +320,7 @@ addEventListener('keydown', (e) => {
   if (chatting) { if (e.key === 'Escape') { chatting = false; $('#chatin').blur(); } return; }
   const k = e.key.toLowerCase();
   keys[k] = true;
-  if (k === 'q' || k === 'e') send({ t: 'skill', k });
+  if (SKILL_KEYS.includes(k)) send({ t: 'skill', k });
   if (k === ' ') e.preventDefault();
 });
 addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
@@ -352,7 +365,7 @@ function holdButton(el, on, off) {
 }
 holdButton($('#tAtk'), () => (touchState.atk = true), () => (touchState.atk = false));
 holdButton($('#tQ'), () => { sendInput(true); send({ t: 'skill', k: 'q' }); });
-holdButton($('#tE'), () => { sendInput(true); send({ t: 'skill', k: 'e' }); });
+for (const k of ['e', 'r', 'f']) holdButton($('#t' + k.toUpperCase()), () => { sendInput(true); send({ t: 'skill', k }); });
 holdButton($('#tChat'), () => {
   const msg = prompt('Mesajın:');
   if (msg && msg.trim()) send({ t: 'chat', msg });
@@ -468,12 +481,13 @@ function drawWorld(cam) {
     ctx.fillStyle = '#c9a26a'; ctx.beginPath(); ctx.arc(d.x, d.y - 14, 14, 0, Math.PI * 2); ctx.fill();
     ctx.fillRect(d.x - 20, d.y - 2, 40, 7);
     hpBar(d.x, d.y - 40, d.hp / d.mh, '#c9a26a');
+    if (d.st) stars(d.x, d.y - 52);
   }
 
   // mermiler
   for (const [x, y, k] of state.proj) {
-    const col = k === 'fire' ? '#ff7a1a' : k === 'poison' ? '#6aff4a' : '#7ad7ff';
-    const r = k === 'fire' ? 13 : 7;
+    const col = { fire: '#ff7a1a', poison: '#6aff4a', light: '#fff27a', spirit: '#7affd0' }[k] || '#7ad7ff';
+    const r = k === 'fire' ? 13 : k === 'light' ? 8 : 7;
     ctx.shadowColor = col; ctx.shadowBlur = 16; ctx.fillStyle = col;
     ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
     ctx.shadowBlur = 0;
@@ -487,7 +501,7 @@ function drawWorld(cam) {
     v.x += (p.x - v.x) * 0.35; v.y += (p.y - v.y) * 0.35;
     const c = CLASSES[p.c];
     const ally = p.f === myFaction;
-    ctx.globalAlpha = p.iv ? 0.35 : 1;
+    ctx.globalAlpha = (p.fx || []).includes('iv') ? 0.35 : 1;
     // krallık halkası
     ctx.fillStyle = fColor(p.f) + '55'; ctx.beginPath(); ctx.ellipse(v.x, v.y + 16, 22, 9, 0, 0, Math.PI * 2); ctx.fill();
     // silah
@@ -500,7 +514,16 @@ function drawWorld(cam) {
     ctx.strokeStyle = p.id === myId ? '#e8b04a' : fColor(p.f); ctx.lineWidth = 3; ctx.stroke();
     // yüz yönü
     ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(v.x + Math.cos(p.a) * 9, v.y + Math.sin(p.a) * 9, 4, 0, Math.PI * 2); ctx.fill();
-    if (p.sh) { ctx.strokeStyle = '#7ab8ffcc'; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(v.x, v.y, 28, 0, Math.PI * 2); ctx.stroke(); }
+    const fx = p.fx || [];
+    for (const id of fx) {
+      if (id === 'iv') continue;
+      const col = FX_COLORS[id];
+      if (id === 'sh') { ctx.strokeStyle = col + 'cc'; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(v.x, v.y, 28, 0, Math.PI * 2); ctx.stroke(); }
+      else {
+        const pulse = 26 + Math.sin(t / 150 + id.length) * 3;
+        ctx.strokeStyle = col + '99'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(v.x, v.y, pulse + 6 * fx.indexOf(id), 0, Math.PI * 2); ctx.stroke();
+      }
+    }
     if (p.ps) { ctx.fillStyle = '#6aff4a55'; ctx.beginPath(); ctx.arc(v.x, v.y, 22, 0, Math.PI * 2); ctx.fill(); }
     ctx.globalAlpha = 1;
     // isim (krallık renginde) + can
@@ -509,6 +532,7 @@ function drawWorld(cam) {
     ctx.fillStyle = '#000'; ctx.fillText(label, v.x + 1, v.y - 39);
     ctx.fillStyle = p.id === myId ? '#e8b04a' : fColor(p.f); ctx.fillText(label, v.x, v.y - 40);
     hpBar(v.x, v.y - 34, p.hp / p.mh, ally ? '#4ad04a' : '#e0473c');
+    if (p.st) stars(v.x, v.y - 58);
   }
 
   // kılıç savurma efekti
@@ -518,8 +542,25 @@ function drawWorld(cam) {
     if (!p) continue;
     const v = view.get(p.id) || p;
     const k = (t - s.t) / 180;
-    ctx.strokeStyle = `rgba(255,240,200,${1 - k})`; ctx.lineWidth = 5;
+    ctx.strokeStyle = s.s ? `rgba(255,80,255,${1 - k})` : `rgba(255,240,200,${1 - k})`; ctx.lineWidth = s.s ? 8 : 5;
     ctx.beginPath(); ctx.arc(v.x, v.y, s.r * (0.7 + k * 0.3), s.a - 0.75, s.a + 0.75); ctx.stroke();
+  }
+  // beceri efektleri: kasırga, dalga, güçlendirme halkası
+  rings = rings.filter((g) => t - g.t < g.dur);
+  for (const g of rings) {
+    const k = (t - g.t) / g.dur;
+    const owner = g.id !== undefined && state.players.find((x) => x.id === g.id);
+    const o = owner ? (view.get(owner.id) || owner) : g;
+    if (g.kind === 'spin') {
+      ctx.strokeStyle = `rgba(255,220,150,${0.9 * (1 - k)})`; ctx.lineWidth = 10;
+      ctx.beginPath(); ctx.arc(o.x, o.y, g.r * (0.6 + 0.4 * k), k * 6, k * 6 + Math.PI * 1.6); ctx.stroke();
+    } else if (g.kind === 'wave') {
+      ctx.fillStyle = `rgba(90,140,255,${0.45 * (1 - k)})`;
+      ctx.beginPath(); ctx.moveTo(g.x, g.y); ctx.arc(g.x, g.y, g.r * (0.4 + 0.6 * k), g.a - g.arc / 2, g.a + g.arc / 2); ctx.closePath(); ctx.fill();
+    } else if (g.kind === 'buff') {
+      ctx.strokeStyle = g.col; ctx.globalAlpha = 1 - k; ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.arc(o.x, o.y, 20 + g.r * k, 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = 1;
+    }
   }
   // patlamalar
   booms = booms.filter((b) => t - b.t < 400);
@@ -538,6 +579,15 @@ function drawWorld(cam) {
     ctx.fillStyle = f.col; ctx.fillText(f.txt, f.x, f.y - k * 40);
   }
   ctx.globalAlpha = 1;
+}
+
+function stars(x, y) {
+  const t = performance.now() / 200;
+  ctx.fillStyle = '#ffe85a';
+  for (let i = 0; i < 3; i++) {
+    const a = t + (i * Math.PI * 2) / 3;
+    ctx.beginPath(); ctx.arc(x + Math.cos(a) * 12, y + Math.sin(a) * 4, 3, 0, Math.PI * 2); ctx.fill();
+  }
 }
 
 function hpBar(x, y, frac, col) {
@@ -600,11 +650,19 @@ function frame() {
     setBar('#xpb', m.xp, m.xpn, '');
     const c = CLASSES[me.c];
     setSkill('#skA', m.cd.atk, c.atkCd);
-    setSkill('#skQ', m.cd.q, c.q.cd);
-    setSkill('#skE', m.cd.e, c.e.cd);
-    if (isTouch) {
-      $('#tQ').textContent = m.cd.q > 0.05 ? Math.ceil(m.cd.q) : 'Q';
-      $('#tE').textContent = m.cd.e > 0.05 ? Math.ceil(m.cd.e) : 'E';
+    for (const k of SKILL_KEYS) {
+      const K = k.toUpperCase();
+      setSkill('#sk' + K, m.cd[k], c.skills[k].cd);
+      $('#sk' + K).style.opacity = m.mp < c.skills[k].mp ? 0.5 : 1;
+      if (isTouch) $('#t' + K).textContent = m.cd[k] > 0.05 ? Math.ceil(m.cd[k]) : K;
+    }
+    const bf = $('#buffs');
+    bf.innerHTML = '';
+    for (const [id, left] of m.fx) {
+      const d = document.createElement('div');
+      d.textContent = `${FX_NAMES[id] || id} ${Math.ceil(left)}s`;
+      d.style.borderColor = FX_COLORS[id] || '#e8b04a';
+      bf.appendChild(d);
     }
     const info = $('#info');
     info.innerHTML = '';
