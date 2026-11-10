@@ -154,19 +154,23 @@ function resolveCollisions(o, r) {
 
 // Izgarayı kullanarak sadece yakındaki canlı hedefleri getirir.
 function targetsNear(x, y, r) {
-  return grid.query(x, y, r + PLAYER_R, (e) => !e.dead);
+  return grid.query(x, y, r + 30, (e) => !e.dead);
 }
 
-// Aynı krallıktan oyuncular birbirine vuramaz.
+const isPlayer = (e) => !!e && !e.dummy && !e.mob;
+
+// Aynı krallıktan oyuncular birbirine vuramaz; canavarlar birbirine vuramaz; geri dönen canavara vurulamaz.
 function canHurt(src, t) {
   if (!t || t.dead || src === t) return false;
-  if (src && !src.dummy && !t.dummy && src.f === t.f) return false;
+  if (isPlayer(src) && isPlayer(t) && src.f === t.f) return false;
+  if (src && !isPlayer(src) && !isPlayer(t)) return false;
+  if (t.mob && t.state === 'return') return false;
   return true;
 }
 
 // Yakındaki dost oyuncular (kendisi dahil) - "parti" sistemi gelene kadar aynı krallıktakiler
 function allies(p, r) {
-  return grid.query(p.x, p.y, r, (e) => !e.dummy && !e.dead && e.f === p.f);
+  return grid.query(p.x, p.y, r, (e) => isPlayer(e) && !e.dead && e.f === p.f);
 }
 
 // ---------------- ETKİLER (BUFF / DEBUFF) ----------------
@@ -199,6 +203,7 @@ function recalcStats(p) {
 function heal(src, target, base) {
   const amount = Math.round(base * scale(src));
   target.hp = Math.min(target.mh, target.hp + amount);
+  healThreat(src, amount);
   events.push({ t: 'heal', x: Math.round(target.x), y: Math.round(target.y), v: amount });
 }
 
@@ -206,9 +211,9 @@ function heal(src, target, base) {
 // opts: { kb: geri savurma gücü, stun: sersemletme süresi, from: savurma merkezi, mul: ek çarpan, noCrit }
 function dealDamage(src, target, amount, opts = {}) {
   if (!canHurt(src, target)) return 0;
-  if (inSafe(target) || (src && !src.dummy && inSafe(src))) return 0;
+  if (inSafe(target) || (isPlayer(src) && inSafe(src))) return 0;
   let crit = false;
-  if (src && !src.dummy) {
+  if (isPlayer(src)) {
     amount *= 1 + mod(src, 'atk');
     if (opts.mul) amount *= opts.mul;
     if (src.ambush) { amount *= 1.5; src.ambush = false; } // gölgeden çıkan ilk vuruş
@@ -220,21 +225,22 @@ function dealDamage(src, target, amount, opts = {}) {
   events.push({ t: 'dmg', x: Math.round(target.x), y: Math.round(target.y), v: amount, c: crit ? 1 : 0, bs: opts.bs ? 1 : 0 });
 
   // can çalma (Ruh Kılıcı aurası)
-  if (src && !src.dummy && !src.dead) {
+  if (isPlayer(src) && !src.dead) {
     const ls = mod(src, 'lifesteal');
     if (ls > 0) src.hp = Math.min(src.mh, src.hp + amount * ls);
   }
   // geri savurma + sersemletme
-  if (opts.kb && !target.dummy) {
+  if (opts.kb && !target.dummy && !(target.mob && target.heavy)) {
     const from = opts.from || src;
     const d = dist(from, target) || 1;
-    const k = opts.kb * PVP_KB;
+    const k = opts.kb * (target.mob ? 1 : PVP_KB); // canavarlara tam savurma
     target.kb = { vx: ((target.x - from.x) / d) * k, vy: ((target.y - from.y) / d) * k };
   }
   if (opts.stun) {
-    target.stunUntil = Math.max(target.stunUntil || 0, now + (target.dummy ? opts.stun : opts.stun * 0.7));
-    if (!target.dummy) target.dash = null;
+    target.stunUntil = Math.max(target.stunUntil || 0, now + (isPlayer(target) ? opts.stun * 0.7 : opts.stun));
+    if (isPlayer(target)) target.dash = null;
   }
+  if (target.mob && isPlayer(src)) onMobHit(target, src, amount);
   if (target.hp <= 0) kill(src, target);
   return amount;
 }
@@ -248,13 +254,17 @@ function kill(src, target) {
   target.kb = null;
   target.timers = [];
   if (target.dummy) {
-    if (src) gainXp(src, 25);
+    if (isPlayer(src)) gainXp(src, 25);
     return;
   }
+  if (target.mob) return onMobDeath(target, src);
   target.deaths++;
   target.streak = 0;
   target.dirty = true;
-  if (src && !src.dummy) {
+  if (src && src.mob) {
+    events.push({ t: 'kill', k: src.n, v: target.n, vf: target.f, s: 0 });
+    sendTo(target, { t: 'dead', by: src.n, in: RESPAWN });
+  } else if (isPlayer(src)) {
     src.kills++;
     src.streak = (src.streak || 0) + 1;
     src.dirty = true;
@@ -268,7 +278,7 @@ function kill(src, target) {
 }
 
 function gainXp(p, amount) {
-  if (p.dummy || p.lvl >= MAX_LEVEL) return;
+  if (!isPlayer(p) || p.lvl >= MAX_LEVEL) return;
   p.xp += amount;
   p.dirty = true;
   while (p.xp >= xpNeed(p.lvl) && p.lvl < MAX_LEVEL) {
@@ -289,7 +299,7 @@ function gainXp(p, amount) {
 function hitCone(p, range, arc, fn) {
   let n = 0;
   for (const t of targetsNear(p.x, p.y, range)) {
-    if (!canHurt(p, t) || dist(p, t) > range + PLAYER_R) continue;
+    if (!canHurt(p, t) || dist(p, t) > range + (t.r || PLAYER_R)) continue;
     if (Math.abs(angleDiff(Math.atan2(t.y - p.y, t.x - p.x), p.angle)) <= arc / 2) { fn(t); n++; }
   }
   return n;
@@ -297,7 +307,7 @@ function hitCone(p, range, arc, fn) {
 // Daire: karakterin etrafında 360°.
 function hitCircle(cx, cy, src, r, fn) {
   for (const t of targetsNear(cx, cy, r)) {
-    if (canHurt(src, t) && Math.hypot(t.x - cx, t.y - cy) <= r + PLAYER_R) fn(t);
+    if (canHurt(src, t) && Math.hypot(t.x - cx, t.y - cy) <= r + (t.r || PLAYER_R)) fn(t);
   }
 }
 // Saldıran, hedefin arkasında mı? (hedefin baktığı yön ile hedef→saldıran yönü arasındaki açı > 110°)
@@ -378,6 +388,302 @@ function explode(pr, owner) {
   });
 }
 
+// ---------------- CANAVARLAR ----------------
+// Davranış tipleri:
+//   passive : asla saldırmaz, vurulunca kaçar
+//   semi    : yarı agresif - biri vurunca (veya grubuna vurulunca) saldırır
+//   aggr    : tam agresif - görüş menziline giren oyuncuya saldırır
+// Durum makinesi: idle (boşta/dolaşma) → chase (kovalama) → attack (saldırı hazırlığı + vuruş)
+//                 → return (doğduğu yere dönüş, canı dolar) → idle
+const MOB_TYPES = {
+  tilki: { name: 'Kızıl Tilki', lvl: 1, hp: 60, dmg: 5, speed: 150, r: 15, aggro: 'passive', color: '#d9772b', shape: 'beast', xp: 18, respawn: 15 },
+  kurt: { name: 'Boz Kurt', lvl: 3, hp: 130, dmg: 9, speed: 175, r: 17, aggro: 'semi', color: '#8a8f99', shape: 'beast', xp: 40, respawn: 18 },
+  domuz: { name: 'Yaban Domuzu', lvl: 5, hp: 220, dmg: 13, speed: 160, r: 20, aggro: 'semi', color: '#6b4a32', shape: 'beast', xp: 70, respawn: 20 },
+  haydut: { name: 'Dağ Haydudu', lvl: 8, hp: 320, dmg: 18, speed: 170, r: 19, aggro: 'aggr', color: '#5a5f2a', shape: 'human', xp: 120, respawn: 25, sight: 230 },
+  ayi: { name: 'Kara Ayı', lvl: 12, hp: 900, dmg: 32, speed: 150, r: 28, aggro: 'aggr', color: '#2b2420', shape: 'beast', xp: 320, respawn: 45, sight: 200, heavy: false },
+};
+// Grup = [tür, merkez x, merkez y, kaç tane]
+const SPAWN_GROUPS = [
+  ['tilki', 800, 300, 3], ['tilki', 350, 800, 3], ['tilki', 2200, 300, 3], ['tilki', 2650, 800, 3], ['tilki', 1150, 2000, 3], ['tilki', 1850, 2000, 3],
+  ['kurt', 900, 850, 4], ['kurt', 2100, 850, 4], ['kurt', 1200, 1700, 4], ['kurt', 1800, 1700, 4],
+  ['domuz', 600, 1100, 3], ['domuz', 2400, 1100, 3], ['domuz', 800, 1700, 3], ['domuz', 2200, 1700, 3],
+  ['haydut', 1150, 950, 4], ['haydut', 1850, 950, 4], ['haydut', 1500, 1250, 4],
+  ['ayi', 1500, 700, 1], ['ayi', 350, 1900, 2], ['ayi', 2650, 1900, 2],
+];
+const LEASH = 800; // 40 metre: doğma noktasından bu kadar uzaklaşan canavar geri döner
+const MOB_ATTACK_WINDUP = 0.35; // saldırı öncesi hazırlık (oyuncu kaçabilsin diye)
+const MOB_ATTACK_CD = 1.3;
+const PACK_ALERT_R = 450;
+const ACTIVE_R = 1400; // yakınında oyuncu olmayan canavarlar "uyur" (işlemci tasarrufu)
+const mobs = [];
+let mobSeq = 0;
+
+function freeSpot(cx, cy, spread, r) {
+  for (let i = 0; i < 30; i++) {
+    const a = Math.random() * Math.PI * 2, d = Math.random() * spread;
+    const p = { x: cx + Math.cos(a) * d, y: cy + Math.sin(a) * d };
+    if (!inRock(p, r + 4) && !inSafe(p) && p.x > r && p.y > r && p.x < MAP.w - r && p.y < MAP.h - r) return p;
+  }
+  return { x: cx, y: cy };
+}
+
+function makeMob(type, home, pack) {
+  const T = MOB_TYPES[type];
+  const pos = freeSpot(home.x, home.y, 70, T.r);
+  const m = {
+    id: 'm' + ++mobSeq, mob: true, type, n: T.name, lvl: T.lvl, aggro: T.aggro, r: T.r, heavy: !!T.heavy,
+    hp: T.hp, mh: T.hp, dmg: T.dmg, speed: T.speed, sight: T.sight || 0, xp: T.xp,
+    home: { x: pos.x, y: pos.y }, x: pos.x, y: pos.y, angle: Math.random() * 6.28, pack,
+    state: 'idle', threat: new Map(), target: null, windUntil: 0, nextAtk: 0, wander: null, nextWander: now + Math.random() * 4,
+    fleeUntil: 0, fleeFrom: null, kb: null, stunUntil: 0, effects: [], dead: false, respawnAt: 0, active: true,
+  };
+  grid.insert(m);
+  mobs.push(m);
+  return m;
+}
+
+for (const [type, x, y, count] of SPAWN_GROUPS) {
+  const pack = [];
+  for (let i = 0; i < count; i++) pack.push(makeMob(type, { x, y }, pack));
+}
+
+function mobView(m) {
+  return {
+    id: m.id, t: m.type, x: Math.round(m.x), y: Math.round(m.y), a: +m.angle.toFixed(2), hp: Math.round(m.hp), mh: m.mh, l: m.lvl,
+    st: m.stunUntil > now ? 1 : 0, w: m.windUntil > now ? 1 : 0, s: m.state === 'return' ? 'r' : m.target ? 'c' : 'i',
+  };
+}
+
+// ---- Tehdit (aggro) ----
+function addThreat(m, p, v) {
+  if (m.aggro === 'passive' || m.state === 'return' || !isPlayer(p)) return;
+  m.threat.set(p.id, (m.threat.get(p.id) || 0) + v);
+}
+
+// Oyuncu canavara vurduğunda: tehdit ekle, gruba haber ver (Pack Alert), pasifse kaç
+function onMobHit(m, p, amount) {
+  if (m.aggro === 'passive') {
+    m.fleeUntil = now + 2.5;
+    m.fleeFrom = { x: p.x, y: p.y };
+    return;
+  }
+  addThreat(m, p, amount);
+  for (const o of m.pack) {
+    if (o === m || o.dead || o.state === 'return') continue;
+    if (dist(o, m) <= PACK_ALERT_R && o.threat.size === 0) {
+      addThreat(o, p, 1); // zincirleme: gruptaki herkes saldırana yönelir
+      events.push({ t: 'alert', x: Math.round(o.x), y: Math.round(o.y) });
+    }
+  }
+}
+
+// İyileştiren oyuncu, iyileştirdiği kişiyle savaşan canavarların dikkatini çeker
+function healThreat(healer, amount) {
+  if (!isPlayer(healer)) return;
+  for (const m of grid.query(healer.x, healer.y, 600, (e) => e.mob && !e.dead && e.threat.size > 0)) addThreat(m, healer, amount * 0.5);
+}
+
+function pickTarget(m) {
+  let best = null, bestV = -1;
+  for (const [pid, v] of m.threat) {
+    const p = players.get(pid);
+    // geçersiz hedefleri tehdit tablosundan sil: çıkmış, ölmüş, köyde, çok uzakta
+    if (!p || p.dead || inSafe(p) || dist(p, m.home) > LEASH + 150 || (hasFx(p, 'iv') && dist(p, m) > 60)) { m.threat.delete(pid); continue; }
+    if (v > bestV) { bestV = v; best = p; }
+  }
+  return best;
+}
+
+function startReturn(m) {
+  m.state = 'return';
+  m.threat.clear();
+  m.target = null;
+  m.windUntil = 0;
+  m.kb = null;
+}
+
+// ---- Çarpışma: kayalar, harita kenarı ve köyler (canavar köye giremez). Çarpışma normalini döndürür. ----
+function pushOutMob(m) {
+  let nx = 0, ny = 0;
+  const obstacles = MAP.rocks.concat(MAP.villages);
+  for (const o of obstacles) {
+    const d = dist(m, o);
+    const min = o.r + m.r;
+    if (d < min && d > 0) {
+      const ux = (m.x - o.x) / d, uy = (m.y - o.y) / d;
+      m.x = o.x + ux * min; m.y = o.y + uy * min;
+      nx += ux; ny += uy;
+    }
+  }
+  if (m.x < m.r) { m.x = m.r; nx += 1; }
+  if (m.y < m.r) { m.y = m.r; ny += 1; }
+  if (m.x > MAP.w - m.r) { m.x = MAP.w - m.r; nx -= 1; }
+  if (m.y > MAP.h - m.r) { m.y = MAP.h - m.r; ny -= 1; }
+  const len = Math.hypot(nx, ny);
+  return len ? { x: nx / len, y: ny / len } : null;
+}
+
+// ---- Geri savrulma + duvara sıkıştırma ----
+// Savrulan canavar bir engele çarparsa hız vektörünün duvara giren bileşeni silinir (v' = v - (v·n)n),
+// yani duvar boyunca kayar. Kalan hız çok küçükse (köşe ya da dik çarpma) canavar sıkışmış sayılır ve sersemler.
+function applyKnockback(m) {
+  const before = Math.hypot(m.kb.vx, m.kb.vy);
+  m.x += m.kb.vx * DT;
+  m.y += m.kb.vy * DT;
+  const n = pushOutMob(m);
+  if (n) {
+    const dot = m.kb.vx * n.x + m.kb.vy * n.y;
+    if (dot < 0) { m.kb.vx -= dot * n.x; m.kb.vy -= dot * n.y; }
+    if (Math.hypot(m.kb.vx, m.kb.vy) < before * 0.35) {
+      m.stunUntil = Math.max(m.stunUntil, now + 0.6);
+      m.kb = null;
+      events.push({ t: 'pin', x: Math.round(m.x), y: Math.round(m.y) });
+      return;
+    }
+  }
+  m.kb.vx *= 0.82; m.kb.vy *= 0.82;
+  if (Math.hypot(m.kb.vx, m.kb.vy) < 20) m.kb = null;
+}
+
+// ---- Yumuşak ayrışma: canavarlar iç içe geçmez; oyuncuya değince canavar kenara çekilir (oyuncu kilitlenmez) ----
+function separate(m) {
+  for (const o of grid.query(m.x, m.y, m.r + 30, (e) => e !== m && !e.dead && (e.mob || isPlayer(e)))) {
+    const d = dist(m, o) || 0.01;
+    const min = m.r + (o.mob ? o.r : PLAYER_R);
+    if (d >= min) continue;
+    const overlap = min - d;
+    const ux = (m.x - o.x) / d, uy = (m.y - o.y) / d;
+    if (o.mob) {
+      m.x += ux * overlap * 0.25; m.y += uy * overlap * 0.25;
+      o.x -= ux * overlap * 0.25; o.y -= uy * overlap * 0.25;
+    } else {
+      m.x += ux * overlap * 0.5; m.y += uy * overlap * 0.5; // sadece canavar itilir
+    }
+  }
+}
+
+function moveToward(m, tx, ty, speed, stopAt = 0) {
+  const dx = tx - m.x, dy = ty - m.y;
+  const d = Math.hypot(dx, dy);
+  if (d <= stopAt || d < 1) return true;
+  const step = Math.min(speed * DT, d - stopAt);
+  m.x += (dx / d) * step;
+  m.y += (dy / d) * step;
+  m.angle = Math.atan2(dy, dx);
+  return false;
+}
+
+function onMobDeath(m, src) {
+  m.dead = true;
+  m.respawnAt = now + MOB_TYPES[m.type].respawn;
+  m.threat.clear();
+  m.target = null;
+  m.windUntil = 0;
+  m.kb = null;
+  if (isPlayer(src)) {
+    // seviye farkı cezası: çok düşük seviye canavardan az tecrübe
+    const diff = src.lvl - m.lvl;
+    const mul = diff > 10 ? 0.1 : diff > 5 ? 0.5 : 1;
+    const xp = Math.max(1, Math.round(m.xp * mul));
+    gainXp(src, xp);
+    events.push({ t: 'xp', id: src.id, v: xp, x: Math.round(m.x), y: Math.round(m.y) });
+  }
+}
+
+function updateMob(m) {
+  if (m.dead) {
+    if (now >= m.respawnAt) {
+      const p = freeSpot(m.home.x, m.home.y, 40, m.r);
+      Object.assign(m, { dead: false, hp: m.mh, x: p.x, y: p.y, state: 'idle', stunUntil: 0 });
+      grid.update(m);
+    }
+    return;
+  }
+  m.effects = m.effects.filter((e) => e.until > now);
+  if (m.kb) applyKnockback(m);
+  separate(m);
+
+  if (m.stunUntil > now) {
+    m.windUntil = 0; // sersemleyince saldırı hazırlığı bozulur
+    pushOutMob(m);
+    grid.update(m);
+    return;
+  }
+
+  if (m.state === 'return') {
+    m.hp = Math.min(m.mh, m.hp + m.mh * 0.25 * DT);
+    if (moveToward(m, m.home.x, m.home.y, m.speed * 1.6, 5)) {
+      m.state = 'idle';
+      m.hp = m.mh;
+    }
+  } else {
+    // 40 m sınırı
+    if (dist(m, m.home) > LEASH) startReturn(m);
+    else {
+      let target = pickTarget(m);
+      // tam agresif: görüş menzilindeki oyuncuyu fark eder
+      if (!target && m.aggro === 'aggr') {
+        const seen = grid.query(m.x, m.y, m.sight, (e) => isPlayer(e) && !e.dead && !inSafe(e) && !hasFx(e, 'iv'));
+        if (seen.length) {
+          addThreat(m, seen[0], 1);
+          events.push({ t: 'alert', x: Math.round(m.x), y: Math.round(m.y) });
+          for (const o of m.pack) if (o !== m && !o.dead && o.threat.size === 0 && dist(o, m) < PACK_ALERT_R) addThreat(o, seen[0], 1);
+          target = seen[0];
+        }
+      }
+      m.target = target;
+      if (target) {
+        m.state = 'chase';
+        const reach = m.r + PLAYER_R + 8;
+        const d = dist(m, target);
+        m.angle = Math.atan2(target.y - m.y, target.x - m.x);
+        if (m.windUntil) {
+          if (now >= m.windUntil) {
+            // vuruş anı: oyuncu hâlâ menzildeyse ve canavarın önündeyse hasar al
+            if (d <= reach + 18) dealDamage(m, target, m.dmg * (0.9 + Math.random() * 0.2), { noCrit: true });
+            m.windUntil = 0;
+            m.nextAtk = now + MOB_ATTACK_CD;
+          }
+        } else if (d > reach) {
+          moveToward(m, target.x, target.y, m.speed, reach - 4);
+        } else if (now >= m.nextAtk) {
+          m.windUntil = now + MOB_ATTACK_WINDUP;
+          events.push({ t: 'mwind', id: m.id, x: Math.round(m.x), y: Math.round(m.y) });
+        }
+      } else if (m.state === 'chase') {
+        // hedef kayboldu: yerine dön
+        if (dist(m, m.home) > 60) startReturn(m); else m.state = 'idle';
+      } else if (m.fleeUntil > now && m.fleeFrom) {
+        const a = Math.atan2(m.y - m.fleeFrom.y, m.x - m.fleeFrom.x);
+        moveToward(m, m.x + Math.cos(a) * 100, m.y + Math.sin(a) * 100, m.speed * 1.2);
+        if (dist(m, m.home) > LEASH * 0.6) { m.fleeUntil = 0; startReturn(m); }
+      } else {
+        // boşta: doğma noktası çevresinde dolaş
+        if (now >= m.nextWander) {
+          const a = Math.random() * Math.PI * 2, r = Math.random() * 110;
+          m.wander = { x: m.home.x + Math.cos(a) * r, y: m.home.y + Math.sin(a) * r };
+          m.nextWander = now + 3 + Math.random() * 5;
+        }
+        if (m.wander && moveToward(m, m.wander.x, m.wander.y, m.speed * 0.35, 3)) m.wander = null;
+        if (m.hp < m.mh) m.hp = Math.min(m.mh, m.hp + m.mh * 0.05 * DT);
+      }
+    }
+  }
+  pushOutMob(m);
+  grid.update(m);
+}
+
+let mobTick = 0;
+function updateMobs() {
+  // yarım saniyede bir: yakınında oyuncu olmayan ve boşta olan canavarları uyut
+  if (mobTick++ % 15 === 0) {
+    for (const m of mobs) {
+      m.active = m.dead || m.state !== 'idle' || grid.query(m.x, m.y, ACTIVE_R, isPlayer).length > 0;
+    }
+  }
+  for (const m of mobs) if (m.active) updateMob(m);
+}
+
 // ---------------- OYUN DÖNGÜSÜ ----------------
 function update() {
   now += DT;
@@ -417,7 +723,7 @@ function update() {
       if (p.dash.opts) {
         for (const t of targetsNear(p.x, p.y, PLAYER_R + 10)) {
           if (!canHurt(p, t) || p.dash.hit.has(t.id)) continue;
-          if (dist(p, t) < PLAYER_R * 2 + 10) {
+          if (dist(p, t) < PLAYER_R + (t.r || PLAYER_R) + 10) {
             p.dash.hit.add(t.id);
             dealDamage(p, t, p.dash.opts.dmg, { kb: p.dash.opts.kb, stun: p.dash.opts.stun });
           }
@@ -480,9 +786,9 @@ function update() {
       for (const t of targetsNear(pr.x, pr.y, pr.r)) {
         if (t.id === pr.owner) continue;
         if (owner && !canHurt(owner, t)) continue; // dost oyuncunun içinden geçer
-        if (dist(pr, t) < PLAYER_R + pr.r) {
+        if (dist(pr, t) < (t.r || PLAYER_R) + pr.r) {
           if (pr.kind !== 'fire') dealDamage(owner, t, pr.dmg, { kb: 40, from: pr, stun: pr.extra && pr.extra.stun });
-          if (pr.kind === 'poison' && !t.dummy && !t.dead && !inSafe(t)) {
+          if (pr.kind === 'poison' && isPlayer(t) && !t.dead && !inSafe(t)) {
             t.poison = { until: now + 4, dps: 8 * (owner ? dmgMul(owner) : 1), src: pr.owner, acc: 0 };
           }
           done = true;
@@ -495,6 +801,8 @@ function update() {
       projectiles.splice(i, 1);
     }
   }
+
+  updateMobs();
 
   // kuklalar yeniden doğar
   for (const d of dummies) {
@@ -533,8 +841,11 @@ function broadcast() {
     const vis = grid.query(vx, vy, VIEW_R);
     const plist = [];
     const dlist = [];
+    const mlist = [];
     for (const e of vis) {
-      if (e.dummy) {
+      if (e.mob) {
+        mlist.push(mobView(e));
+      } else if (e.dummy) {
         dlist.push({ id: e.id, x: e.x, y: e.y, hp: Math.round(e.hp), mh: e.mh, dead: e.dead, st: e.stunUntil > now });
       } else if (e === me || e.f === me.f || !hasFx(e, 'iv')) {
         // görünmez düşmanların konumu hiç gönderilmez (istemcide gizlemek yetmez: hile ile görülebilir)
@@ -549,6 +860,7 @@ function broadcast() {
       t: 'state',
       players: plist,
       dummies: dlist,
+      mobs: mlist,
       proj: projectiles.filter(near).map((p) => [Math.round(p.x), Math.round(p.y), p.kind]),
       ev: globalEv.concat(localEv.filter(near)),
       me: {
@@ -717,7 +1029,9 @@ const handlers = {
     }
     const factionInfo = {};
     for (const [k, f] of Object.entries(FACTIONS)) factionInfo[k] = { name: f.name, short: f.short, color: f.color };
-    conn.send({ t: 'welcome', id: me.id, map: MAP, classes: classInfo, factions: factionInfo, me: { f: me.f, cls: me.cls } });
+    const mobInfo = {};
+    for (const [k, t] of Object.entries(MOB_TYPES)) mobInfo[k] = { name: t.name, color: t.color, r: t.r, aggro: t.aggro, shape: t.shape };
+    conn.send({ t: 'welcome', id: me.id, map: MAP, classes: classInfo, factions: factionInfo, mobTypes: mobInfo, me: { f: me.f, cls: me.cls } });
     events.push({ t: 'sys', msg: `${me.n} oyuna katıldı (${FACTIONS[me.f].short} · ${CLASSES[me.cls].name})` });
   },
 
@@ -828,3 +1142,6 @@ db.ready.then(() => {
   setInterval(update, 1000 / TICK);
   server.listen(PORT, () => console.log(`PvP Server çalışıyor: http://localhost:${PORT} · veritabanı: ${db.kind}`));
 });
+
+// Testler için iç yapılar (oyun davranışını etkilemez)
+module.exports = { mobs, players, MAP, applyKnockback, updateMob, getNow: () => now };

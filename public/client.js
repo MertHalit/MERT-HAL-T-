@@ -24,6 +24,7 @@ const CLASS_UI = {
   saman: { name: 'Şaman', color: '#1abc9c' },
 };
 
+let MOBT = {};
 let ws = null, myId = null, myFaction = null, MAP = null, CLASSES = null, FACTIONS = FACTION_UI, state = null;
 let account = null, selectedChar = null;
 const view = new Map(); // yumuşak hareket için çizim konumları
@@ -209,7 +210,7 @@ function handle(m) {
   } else if (m.t === 'kicked') {
     alert(m.msg);
   } else if (m.t === 'welcome') {
-    myId = m.id; MAP = m.map; CLASSES = m.classes; FACTIONS = m.factions; myFaction = m.me.f;
+    myId = m.id; MAP = m.map; CLASSES = m.classes; FACTIONS = m.factions; myFaction = m.me.f; MOBT = m.mobTypes || {};
     floaters = []; swings = []; booms = []; rings = []; board = [];
     $('#chatlog').innerHTML = ''; $('#feed').innerHTML = '';
     show('game');
@@ -228,7 +229,11 @@ function handle(m) {
     state = m;
     if (m.board) board = m.board;
     // görüş alanından çıkanları unut
-    const seen = new Set(m.players.map((p) => p.id));
+    const seen = new Set(m.players.map((p) => p.id).concat((m.mobs || []).map((x) => x.id)));
+    for (const x of m.mobs || []) {
+      const v = view.get(x.id);
+      if (!v || Math.hypot(v.x - x.x, v.y - x.y) > 300) view.set(x.id, { x: x.x, y: x.y });
+    }
     for (const id of view.keys()) if (!seen.has(id)) view.delete(id);
     for (const p of m.players) {
       const v = view.get(p.id);
@@ -265,6 +270,9 @@ function onEvent(ev) {
   else if (ev.t === 'wave') rings.push({ kind: 'wave', x: ev.x, y: ev.y, r: ev.r, a: ev.a, arc: ev.arc, t, dur: 350 });
   else if (ev.t === 'buff') rings.push({ kind: 'buff', id: ev.id, x: ev.x, y: ev.y, r: 40, col: FX_COLORS[ev.b] || '#fff', t, dur: 600 });
   else if (ev.t === 'boom') booms.push({ x: ev.x, y: ev.y, t });
+  else if (ev.t === 'alert') floaters.push({ x: ev.x, y: ev.y - 40, txt: '!', col: '#ff3a3a', t, big: true });
+  else if (ev.t === 'pin') { floaters.push({ x: ev.x, y: ev.y - 20, txt: 'SIKIŞTI!', col: '#ffb04a', t }); booms.push({ x: ev.x, y: ev.y, t, small: true }); }
+  else if (ev.t === 'xp' && ev.id === myId) floaters.push({ x: ev.x, y: ev.y - 50, txt: `+${ev.v} TP`, col: '#8ad0ff', t });
   else if (ev.t === 'kill') addFeed(ev);
   else if (ev.t === 'lvl') {
     const p = state && state.players.find((x) => x.id === ev.id);
@@ -379,8 +387,8 @@ function autoAim(me) {
     const d = Math.hypot(p.x - me.x, p.y - me.y);
     if (d < bd) { bd = d; best = p; }
   }
-  for (const d of state.dummies) {
-    if (d.dead) continue;
+  for (const d of state.dummies.concat(state.mobs || [])) {
+    if (d.dead || d.s === 'r') continue;
     const dd = Math.hypot(d.x - me.x, d.y - me.y);
     if (dd < bd) { bd = dd; best = d; }
   }
@@ -484,6 +492,41 @@ function drawWorld(cam) {
     if (d.st) stars(d.x, d.y - 52);
   }
 
+  // canavarlar
+  const tm = performance.now();
+  for (const mb of state.mobs || []) {
+    const T = MOBT[mb.t] || { color: '#888', r: 18, aggro: 'semi', shape: 'beast', name: '?' };
+    const v = view.get(mb.id) || { x: mb.x, y: mb.y };
+    v.x += (mb.x - v.x) * 0.35; v.y += (mb.y - v.y) * 0.35;
+    const r = T.r;
+    ctx.globalAlpha = mb.s === 'r' ? 0.45 : 1;
+    ctx.fillStyle = '#0006'; ctx.beginPath(); ctx.ellipse(v.x, v.y + r * 0.7, r, r * 0.4, 0, 0, Math.PI * 2); ctx.fill();
+    if (mb.w) { // saldırı hazırlığı: kırmızı uyarı halkası
+      ctx.fillStyle = '#ff2a1a44'; ctx.beginPath(); ctx.arc(v.x, v.y, r + 14 + Math.sin(tm / 40) * 3, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.fillStyle = T.color;
+    if (T.shape === 'beast') {
+      ctx.save(); ctx.translate(v.x, v.y); ctx.rotate(mb.a);
+      ctx.beginPath(); ctx.ellipse(0, 0, r * 1.15, r * 0.75, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(r * 0.95, 0, r * 0.5, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#ffe9a0'; ctx.beginPath(); ctx.arc(r * 1.2, -r * 0.18, 2.5, 0, Math.PI * 2); ctx.arc(r * 1.2, r * 0.18, 2.5, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+    } else {
+      ctx.strokeStyle = '#bbb'; ctx.lineWidth = 4; ctx.beginPath();
+      ctx.moveTo(v.x + Math.cos(mb.a) * 10, v.y + Math.sin(mb.a) * 10); ctx.lineTo(v.x + Math.cos(mb.a) * 36, v.y + Math.sin(mb.a) * 36); ctx.stroke();
+      ctx.beginPath(); ctx.arc(v.x, v.y, r, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#e8c9a0'; ctx.beginPath(); ctx.arc(v.x + Math.cos(mb.a) * 7, v.y + Math.sin(mb.a) * 7, 5, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    const label = `Sv.${mb.l} ${T.name}`;
+    ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillStyle = '#000'; ctx.fillText(label, v.x + 1, v.y - r - 15);
+    ctx.fillStyle = T.aggro === 'aggr' ? '#ff6a5a' : T.aggro === 'semi' ? '#ffd04a' : '#e8e8e8';
+    ctx.fillText(label, v.x, v.y - r - 16);
+    if (mb.hp < mb.mh || mb.s === 'c') hpBar(v.x, v.y - r - 10, mb.hp / mb.mh, '#e0473c');
+    if (mb.st) stars(v.x, v.y - r - 26);
+  }
+
   // mermiler
   for (const [x, y, k] of state.proj) {
     const col = { fire: '#ff7a1a', poison: '#6aff4a', light: '#fff27a', spirit: '#7affd0' }[k] || '#7ad7ff';
@@ -567,7 +610,7 @@ function drawWorld(cam) {
   for (const b of booms) {
     const k = (t - b.t) / 400;
     ctx.fillStyle = `rgba(255,120,30,${0.6 * (1 - k)})`;
-    ctx.beginPath(); ctx.arc(b.x, b.y, 95 * (0.4 + k * 0.6), 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(b.x, b.y, (b.small ? 35 : 95) * (0.4 + k * 0.6), 0, Math.PI * 2); ctx.fill();
   }
   // hasar yazıları
   floaters = floaters.filter((f) => t - f.t < 900);
@@ -605,6 +648,8 @@ function drawMinimap() {
   }
   mini.fillStyle = '#6b5f55';
   for (const r of MAP.rocks) { mini.beginPath(); mini.arc(r.x * sx, r.y * sy, Math.max(2, r.r * sx), 0, Math.PI * 2); mini.fill(); }
+  mini.fillStyle = '#ffb04a';
+  for (const mb of state.mobs || []) mini.fillRect(mb.x * sx - 1, mb.y * sy - 1, 2, 2);
   for (const p of state.players) {
     if (p.dead) continue;
     const me = p.id === myId;

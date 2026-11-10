@@ -58,3 +58,47 @@
 | Şaman | Şimşek (sersemletir) | Turna Kutsaması (dostlara +%25 kritik) | Şifa Yağmuru | Rüzgâr Adımı (+%30 hız) |
 
 Şamanın alan güçlendirmeleri şimdilik yakındaki aynı krallık oyuncularına uygulanıyor. Parti sistemi gelince partiye bağlanacak.
+
+# Aşama 3: Canavar Yapay Zekası
+
+## Davranış tipleri ve durum makinesi
+- **Pasif** (Kızıl Tilki): asla saldırmaz, vurulunca 2.5 sn kaçar.
+- **Yarı agresif** (Boz Kurt, Yaban Domuzu): vurulana kadar dolaşır, vurulunca saldırır.
+- **Tam agresif** (Dağ Haydudu, Kara Ayı): görüş menziline (200-230 px) giren oyuncuya saldırır. Görünmez oyuncuları fark etmez.
+- Durumlar: `idle` (doğma noktası çevresinde dolaşma) → `chase` (kovalama) → saldırı hazırlığı (0.35 sn, kırmızı halka; oyuncu kaçabilir) → vuruş → `return` (dönüş).
+
+## Tehdit (aggro) tablosu
+- Her canavar `oyuncu → tehdit` tablosu tutar. Verilen hasar tehdit ekler, iyileştirme yapan oyuncu da tehdidin yarısını alır.
+- En yüksek tehdide sahip geçerli oyuncu hedeflenir. Geçersiz hedefler (çıkmış, ölmüş, köye girmiş, çok uzaklaşmış, görünmez ve uzak) tablodan silinir.
+
+## Grup uyarısı (Pack Alert)
+- Canavarlar gruplar halinde doğar. Gruptan birine vurulunca, 450 px içindeki boştaki grup üyeleri saldırana yönelir. Ekranda "!" işareti çıkar.
+- Agresif bir canavar oyuncuyu fark edince de grubunu uyarır.
+
+## Çarpışma
+- Canavarlar kendi aralarında yumuşak ayrışma uygular (çakışmanın %25'i kadar itişme). İç içe geçmezler, oyuncunun etrafında halka oluştururlar.
+- Oyuncuya değen canavar kendisi kenara çekilir. Oyuncu hiçbir zaman itilmez ya da kilitlenmez.
+- Canavarlar kayalara ve köylere giremez (köyler güvenli bölge).
+
+## Duvara sıkıştırma (`applyKnockback`)
+- Savrulan canavar bir engele çarptığında çarpışma normali `n` hesaplanır. Hızın duvara giren bileşeni silinir: `v' = v − (v·n)·n`. Canavar duvar boyunca kayar.
+- Kalan hız ilk hızın %35'inden azsa (dik çarpma ya da köşe) canavar **sıkışmış** sayılır ve 0.6 sn sersemler. Ekranda "SIKIŞTI!" yazar.
+
+## Geri dönüş (Leash)
+- Doğma noktasından 800 px'ten (40 m) fazla uzaklaşan ya da hedefini kaybeden canavar savaşı bırakır.
+- Tehdit tablosu silinir, 1.6× hızla yerine koşar, yolda canı dolar. Dönerken hasar almaz.
+
+## Performans
+- Yakınında (1400 px) oyuncu olmayan ve boşta duran canavarlar uyutulur. Bu kontrol yarım saniyede bir yapılır.
+- Canavarlar AoI ızgarasında tutulur: oyuncuya sadece görüş alanındakiler gönderilir.
+
+## Canavarlar
+| Tür | Seviye | Tip | Tecrübe |
+|---|---|---|---|
+| Kızıl Tilki | 1 | pasif | 18 |
+| Boz Kurt | 3 | yarı agresif | 40 |
+| Yaban Domuzu | 5 | yarı agresif | 70 |
+| Dağ Haydudu | 8 | agresif | 120 |
+| Kara Ayı | 12 | agresif | 320 |
+
+Oyuncunun seviyesi canavardan 5'ten fazla yüksekse tecrübe yarıya, 10'dan fazla yüksekse onda bire düşer.
