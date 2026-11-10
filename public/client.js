@@ -25,6 +25,8 @@ const CLASS_UI = {
 };
 
 let MOBT = {};
+let skillLv = { q: 1, e: 1, r: 1, f: 1 };
+let sparks = [];
 let ws = null, myId = null, myFaction = null, MAP = null, CLASSES = null, FACTIONS = FACTION_UI, state = null;
 let account = null, selectedChar = null;
 const view = new Map(); // yumuşak hareket için çizim konumları
@@ -275,6 +277,11 @@ function onEvent(ev) {
   else if (ev.t === 'boom') booms.push({ x: ev.x, y: ev.y, t });
   else if (ev.t === 'alert') floaters.push({ x: ev.x, y: ev.y - 40, txt: '!', col: '#ff3a3a', t, big: true });
   else if (ev.t === 'pin') { floaters.push({ x: ev.x, y: ev.y - 20, txt: 'SIKIŞTI!', col: '#ffb04a', t }); booms.push({ x: ev.x, y: ev.y, t, small: true }); }
+  else if (ev.t === 'summon') { rings.push({ kind: 'buff', x: ev.x, y: ev.y, r: 90, col: '#b04aff', t, dur: 700 }); floaters.push({ x: ev.x, y: ev.y - 30, txt: 'ÇAĞRI!', col: '#d08aff', t, big: true }); }
+  else if (ev.t === 'stoneBreak') {
+    booms.push({ x: ev.x, y: ev.y, t, big: true });
+    for (let i = 0; i < 40; i++) { const a = Math.random() * 6.28, sp = 80 + Math.random() * 260; sparks.push({ x: ev.x, y: ev.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, t, life: 600 + Math.random() * 500, col: Math.random() < 0.5 ? '#b04aff' : '#ff7aff' }); }
+  }
   else if (ev.t === 'xp' && ev.id === myId) floaters.push({ x: ev.x, y: ev.y - 50, txt: `+${ev.v} TP`, col: '#8ad0ff', t });
   else if (ev.t === 'kill') addFeed(ev);
   else if (ev.t === 'lvl') {
@@ -333,6 +340,7 @@ addEventListener('keydown', (e) => {
   if (window.itemsUI && itemsUI.key(k)) return;
   keys[k] = true;
   if (SKILL_KEYS.includes(k)) send({ t: 'skill', k });
+  if (k === 'z') send({ t: 'pickup' });
   if (k === ' ') e.preventDefault();
 });
 addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
@@ -376,6 +384,7 @@ function holdButton(el, on, off) {
   el.addEventListener('touchcancel', end);
 }
 holdButton($('#tAtk'), () => (touchState.atk = true), () => (touchState.atk = false));
+holdButton($('#tPick'), () => send({ t: 'pickup' }));
 holdButton($('#tQ'), () => { sendInput(true); send({ t: 'skill', k: 'q' }); });
 for (const k of ['e', 'r', 'f']) holdButton($('#t' + k.toUpperCase()), () => { sendInput(true); send({ t: 'skill', k }); });
 holdButton($('#tChat'), () => {
@@ -391,7 +400,7 @@ function autoAim(me) {
     const d = Math.hypot(p.x - me.x, p.y - me.y);
     if (d < bd) { bd = d; best = p; }
   }
-  for (const d of state.dummies.concat(state.mobs || [])) {
+  for (const d of state.dummies.concat(state.mobs || [], state.stones || [])) {
     if (d.dead || d.s === 'r') continue;
     const dd = Math.hypot(d.x - me.x, d.y - me.y);
     if (dd < bd) { bd = dd; best = d; }
@@ -498,8 +507,67 @@ function drawWorld(cam) {
     if (d.st) stars(d.x, d.y - 52);
   }
 
-  // canavarlar
   const tm = performance.now();
+  // yerdeki ganimet
+  const ICONS = { 1001: '⚔️', 1011: '🗡️', 1021: '⚔️', 1031: '🪄', 2001: '🥋', 2101: '⛑️', 3001: '🪨', 3002: '🌙', 3003: '🔶', 4001: '📜', 4002: '🔩', 5001: '💎', 5002: '✨', 6001: '📘' };
+  for (const g of state.drops || []) {
+    const bob = Math.sin(tm / 300 + g.x) * 2;
+    ctx.fillStyle = g.m ? '#ffd04a55' : g.o ? '#ff3a3a33' : '#ffffff22';
+    ctx.beginPath(); ctx.ellipse(g.x, g.y + 9, 14, 5, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.font = '20px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(g.g ? '💰' : ICONS[g.i] || '❔', g.x, g.y + bob);
+    ctx.textBaseline = 'alphabetic';
+    if (g.p) { ctx.font = 'bold 10px sans-serif'; ctx.fillStyle = '#ffd04a'; ctx.fillText('+' + g.p, g.x + 12, g.y - 8); }
+    if (g.o) {
+      ctx.font = '10px sans-serif'; ctx.fillStyle = '#000'; ctx.fillText(`${g.o} (${g.ot})`, g.x + 1, g.y + 23);
+      ctx.fillStyle = '#ff9a8a'; ctx.fillText(`${g.o} (${g.ot})`, g.x, g.y + 22);
+    }
+  }
+  // Bozulma Taşları: canı azaldıkça parıltı ve kıvılcımlar şiddetlenir
+  for (const st of state.stones || []) {
+    const k = 1 - st.hp / st.mh; // 0: tam can, 1: kırılmak üzere
+    const pulse = 1 + Math.sin(tm / (220 - 150 * k)) * (0.08 + 0.2 * k);
+    const glow = ctx.createRadialGradient(st.x, st.y, st.r * 0.3, st.x, st.y, st.r * (1.6 + 1.4 * k) * pulse);
+    glow.addColorStop(0, `rgba(190,80,255,${0.35 + 0.45 * k})`);
+    glow.addColorStop(1, 'rgba(120,20,200,0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath(); ctx.arc(st.x, st.y, st.r * (1.6 + 1.4 * k) * pulse, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#0007'; ctx.beginPath(); ctx.ellipse(st.x, st.y + st.r * 0.8, st.r, st.r * 0.35, 0, 0, Math.PI * 2); ctx.fill();
+    // kristal
+    ctx.fillStyle = '#2a1238';
+    ctx.beginPath();
+    ctx.moveTo(st.x, st.y - st.r * 1.5); ctx.lineTo(st.x + st.r * 0.75, st.y - st.r * 0.2); ctx.lineTo(st.x + st.r * 0.5, st.y + st.r * 0.8);
+    ctx.lineTo(st.x - st.r * 0.5, st.y + st.r * 0.8); ctx.lineTo(st.x - st.r * 0.75, st.y - st.r * 0.2); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = `rgba(220,140,255,${0.5 + 0.5 * k})`; ctx.lineWidth = 2 + 2 * k; ctx.stroke();
+    // çatlaklar (can azaldıkça artar)
+    ctx.strokeStyle = `rgba(255,150,255,${0.4 + 0.6 * k})`; ctx.lineWidth = 2;
+    const cracks = Math.floor(k * 6);
+    for (let i = 0; i < cracks; i++) {
+      const a = i * 1.7;
+      ctx.beginPath(); ctx.moveTo(st.x, st.y - st.r * 0.2);
+      ctx.lineTo(st.x + Math.cos(a) * st.r * 0.45, st.y + Math.sin(a) * st.r * 0.6 - st.r * 0.2); ctx.stroke();
+    }
+    // kıvılcımlar
+    if (Math.random() < 0.05 + 0.6 * k) {
+      const a = Math.random() * 6.28;
+      sparks.push({ x: st.x + Math.cos(a) * st.r * 0.6, y: st.y - st.r * 0.3 + Math.sin(a) * st.r * 0.6, vx: Math.cos(a) * 40, vy: -60 - Math.random() * 80, t: tm, life: 700, col: '#e08aff' });
+    }
+    ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillStyle = '#000'; ctx.fillText(`Sv.${st.l} Bozulma Taşı`, st.x + 1, st.y - st.r * 1.5 - 17);
+    ctx.fillStyle = '#e08aff'; ctx.fillText(`Sv.${st.l} Bozulma Taşı`, st.x, st.y - st.r * 1.5 - 18);
+    ctx.fillStyle = '#000a'; ctx.fillRect(st.x - 40, st.y - st.r * 1.5 - 12, 80, 7);
+    ctx.fillStyle = '#b04aff'; ctx.fillRect(st.x - 39, st.y - st.r * 1.5 - 11, 78 * st.hp / st.mh, 5);
+  }
+  sparks = sparks.filter((p) => tm - p.t < p.life);
+  for (const p of sparks) {
+    const dt = (tm - p.t) / 1000;
+    ctx.globalAlpha = 1 - (tm - p.t) / p.life;
+    ctx.fillStyle = p.col;
+    ctx.fillRect(p.x + p.vx * dt - 1.5, p.y + p.vy * dt + 40 * dt * dt - 1.5, 3, 3);
+  }
+  ctx.globalAlpha = 1;
+
+  // canavarlar
   for (const mb of state.mobs || []) {
     const T = MOBT[mb.t] || { color: '#888', r: 18, aggro: 'semi', shape: 'beast', name: '?' };
     const v = view.get(mb.id) || { x: mb.x, y: mb.y };
@@ -616,7 +684,8 @@ function drawWorld(cam) {
   for (const b of booms) {
     const k = (t - b.t) / 400;
     ctx.fillStyle = `rgba(255,120,30,${0.6 * (1 - k)})`;
-    ctx.beginPath(); ctx.arc(b.x, b.y, (b.small ? 35 : 95) * (0.4 + k * 0.6), 0, Math.PI * 2); ctx.fill();
+    if (b.big) ctx.fillStyle = `rgba(190,80,255,${0.6 * (1 - k)})`;
+    ctx.beginPath(); ctx.arc(b.x, b.y, (b.small ? 35 : b.big ? 160 : 95) * (0.4 + k * 0.6), 0, Math.PI * 2); ctx.fill();
   }
   // hasar yazıları
   floaters = floaters.filter((f) => t - f.t < 900);
@@ -656,6 +725,8 @@ function drawMinimap() {
   for (const r of MAP.rocks) { mini.beginPath(); mini.arc(r.x * sx, r.y * sy, Math.max(2, r.r * sx), 0, Math.PI * 2); mini.fill(); }
   mini.fillStyle = '#ffb04a';
   for (const mb of state.mobs || []) mini.fillRect(mb.x * sx - 1, mb.y * sy - 1, 2, 2);
+  mini.fillStyle = '#d08aff';
+  for (const st of state.stones || []) { mini.beginPath(); mini.arc(st.x * sx, st.y * sy, 3.5, 0, Math.PI * 2); mini.fill(); }
   for (const p of state.players) {
     if (p.dead) continue;
     const me = p.id === myId;
@@ -705,8 +776,13 @@ function frame() {
     for (const k of SKILL_KEYS) {
       const K = k.toUpperCase();
       setSkill('#sk' + K, m.cd[k], c.skills[k].cd);
+      $('#sk' + K + ' b').textContent = skillLv[k] > 1 ? `${K} ${skillLv[k]}` : K;
       $('#sk' + K).style.opacity = m.mp < c.skills[k].mp ? 0.5 : 1;
       if (isTouch) $('#t' + K).textContent = m.cd[k] > 0.05 ? Math.ceil(m.cd[k]) : K;
+    }
+    if (isTouch) {
+      const canPick = (state.drops || []).some((g) => !g.o && Math.hypot(g.x - me.x, g.y - me.y) < 90);
+      $('#tPick').classList.toggle('hidden', !canPick);
     }
     const bf = $('#buffs');
     bf.innerHTML = '';

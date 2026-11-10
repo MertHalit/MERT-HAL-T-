@@ -137,3 +137,33 @@ Oyuncunun seviyesi canavardan 5'ten fazla yüksekse tecrübe yarıya, 10'dan faz
 - **Efsun Taşı:** boş yuvaya, eşyada olmayan bir efsun ekler. Başarı şansı 1. efsunda %100'den 5. efsunda %25'e düşer. 1-5 temel yuvalardır, 6-7 özel efsunlar için ayrıldı.
 - **Değişim Tozu:** efsun sayısı aynı kalır, hepsi kısmi Fisher-Yates karıştırmayla **tekrarsız** yeniden çekilir.
 - Bütün efsunlar savaşa gerçekten etki eder (hasar, savunma türü, saldırı ve hareket hızı, can ve mana emme, sersemletme, delici vuruş).
+
+# Aşama 5: Bozulma Taşları ve Ganimet
+
+## Bozulma Taşı
+- Hareketsiz, çok canlı (Sv.5: 3.000, Sv.10: 6.500, Sv.15: 11.000) ve zırhlı (%30-40 hasar azaltma, delici vuruş zırhı yok sayar). Geri savrulmaz, sersemlemez.
+- Canı **%80 / %60 / %40 / %20** eşiklerine düştükçe etrafına (taş yarıçapı + 110-220 px) **3-4 grup** agresif canavar çağırır. Çağrılanlar o ana kadar en çok hasar veren oyuncuya saldırır.
+- Çağrılan canavarlar yeniden doğmaz. Boşta kalırlarsa 150 sn sonra kaybolurlar.
+- Haritada 9 olası yer var, aynı anda 5 taş bulunur. Kırılan taş 90-150 sn sonra boş bir yerde yeniden belirir.
+- Yakında oyuncu yoksa hasarlı taş yavaşça iyileşir. Tam cana dönünce eşikler sıfırlanır.
+- **Görsel efekt:** İstemci `şiddet = 1 − can/maksCan` değerini hesaplar. Parıltının yarıçapı, opaklığı ve nabız hızı, çatlak sayısı ve kıvılcım sıklığı bu değerle artar (Unreal'daki malzeme parametresinin karşılığı).
+- Tecrübe, taşa hasar veren herkese hasar payına göre dağıtılır.
+
+## Ganimet tabloları (`loot.js`)
+- `LootTable`: altın aralığı (birden çok yığına bölünebilir), bağımsız şanslı eşya satırları, en az eşya garantisi. Eşyalar + seviyeli de düşebilir (taş seviyesine göre +0..+4).
+- Canavarlar ve taşlar için ayrı tablolar var. Taşlar Beceri Kitabı, malzeme, parşömen, efsun eşyası, zırh ve silah düşürür.
+
+## Yere saçılma
+- Eşyalar kaynağın etrafına eşit aralıklı açılarla, rastgele hızla fırlar. Her adımda %14 sürtünmeyle yavaşlar, kayalardan seker.
+- Ganimet ayrı bir AoI ızgarasında tutulur, yalnızca görüş alanındaki oyunculara gönderilir.
+
+## Sahiplik (çalınmaya karşı)
+- Ganimetin sahibi, kaynağa en çok hasar veren oyuncudur (karakter kimliğiyle tutulur, oyuncu çıkıp girse de sahiplik kalır).
+- İlk **30 saniye** yalnızca sahibi toplayabilir. Diğer oyuncular eşyanın altında sahibinin adını ve kalan süreyi görür. Toplamaya çalışırlarsa sunucu reddeder.
+- 30 saniye sonra herkes toplayabilir. 120 saniye sonra eşya yok olur.
+- Parti sistemi gelince sahiplik partiye genişletilecek.
+- Toplama: **Z** tuşu, telefonda 🖐 düğmesi (90 px içindeki toplanabilir her şey).
+
+## Beceri seviyeleri
+- **Beceri Kitabı** okununca seçilen becerinin seviyesi 1 artar (1-20). Her seviye becerinin hasarını ve iyileştirmesini %4 artırır.
+- Seviyeler `skills` tablosuna kaydedilir. Beceri çubuğunda seviye görünür (örn. "Q 2").

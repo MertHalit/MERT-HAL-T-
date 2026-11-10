@@ -10,6 +10,7 @@ const db = require('./db');
 const { SpatialGrid } = require('./aoi');
 const { ActionGate, CheatMonitor, auditMove } = require('./anticheat');
 const I = require('./items');
+const { TABLES: LOOT } = require('./loot');
 
 const scrypt = promisify(crypto.scrypt);
 const PORT = process.env.PORT || 3000;
@@ -142,7 +143,7 @@ function spawnPoint(faction) {
 }
 
 function resolveCollisions(o, r) {
-  for (const rock of MAP.rocks) {
+  for (const rock of MAP.rocks.concat(stones.filter((s) => !s.dead))) {
     const d = dist(o, rock);
     const min = rock.r + r;
     if (d < min && d > 0) {
@@ -159,7 +160,7 @@ function targetsNear(x, y, r) {
   return grid.query(x, y, r + 30, (e) => !e.dead);
 }
 
-const isPlayer = (e) => !!e && !e.dummy && !e.mob;
+const isPlayer = (e) => !!e && !e.dummy && !e.mob && !e.stone;
 
 // Aynı krallıktan oyuncular birbirine vuramaz; canavarlar birbirine vuramaz; geri dönen canavara vurulamaz.
 function canHurt(src, t) {
@@ -212,7 +213,7 @@ function recalcStats(p) {
 const bonusOf = (p, k) => (p.bonus && p.bonus[k]) || 0;
 
 function heal(src, target, base) {
-  const amount = Math.round(base * scale(src));
+  const amount = Math.round(base * scale(src) * (src.curSkillMul || 1));
   target.hp = Math.min(target.mh, target.hp + amount);
   healThreat(src, amount);
   events.push({ t: 'heal', x: Math.round(target.x), y: Math.round(target.y), v: amount });
@@ -233,6 +234,7 @@ function dealDamage(src, target, amount, opts = {}) {
     if (!opts.noCrit && Math.random() < src.crit + mod(src, 'crit')) { amount *= CRIT_MUL; crit = true; }
   }
   amount *= Math.max(0.1, 1 + mod(target, 'taken'));
+  if (target.stone && !pierce) amount *= 1 - target.armor; // taşın zırhı
   if (isPlayer(target) && !pierce) {
     const def = target.eqDef + bonusOf(target, opts.magic ? 'magicDef' : 'meleeDef');
     amount *= 1 - Math.min(0.75, def / 100);
@@ -250,17 +252,18 @@ function dealDamage(src, target, amount, opts = {}) {
     if (!opts.stun && Math.random() < bonusOf(src, 'stun') / 100) opts = { ...opts, stun: 0.5 };
   }
   // geri savurma + sersemletme
-  if (opts.kb && !target.dummy && !(target.mob && target.heavy)) {
+  if (opts.kb && !target.dummy && !target.stone && !(target.mob && target.heavy)) {
     const from = opts.from || src;
     const d = dist(from, target) || 1;
     const k = opts.kb * (target.mob ? 1 : PVP_KB); // canavarlara tam savurma
     target.kb = { vx: ((target.x - from.x) / d) * k, vy: ((target.y - from.y) / d) * k };
   }
-  if (opts.stun) {
+  if (opts.stun && !target.stone) {
     target.stunUntil = Math.max(target.stunUntil || 0, now + (isPlayer(target) ? opts.stun * 0.7 : opts.stun));
     if (isPlayer(target)) target.dash = null;
   }
   if (target.mob && isPlayer(src)) onMobHit(target, src, amount);
+  if (target.stone && isPlayer(src)) onStoneHit(target, src, amount);
   if (target.hp <= 0) kill(src, target);
   return amount;
 }
@@ -278,6 +281,7 @@ function kill(src, target) {
     return;
   }
   if (target.mob) return onMobDeath(target, src);
+  if (target.stone) return onStoneDeath(target, src);
   target.deaths++;
   target.streak = 0;
   target.dirty = true;
@@ -398,7 +402,9 @@ function useSkill(p, key) {
   if (!p.gate.tryUse(key, now, s.cd)) return;
   p.mp -= s.mp;
   if (key !== 'e' || p.cls !== 'golge') breakInvis(p);
-  s.cast(p, dmgMul(p));
+  p.curSkillMul = skillMul(p, key);
+  s.cast(p, dmgMul(p) * p.curSkillMul);
+  p.curSkillMul = 1;
 }
 
 function explode(pr, owner) {
@@ -454,7 +460,7 @@ function makeMob(type, home, pack) {
     id: 'm' + ++mobSeq, mob: true, type, n: T.name, lvl: T.lvl, aggro: T.aggro, r: T.r, heavy: !!T.heavy,
     hp: T.hp, mh: T.hp, dmg: T.dmg, speed: T.speed, sight: T.sight || 0, xp: T.xp,
     home: { x: pos.x, y: pos.y }, x: pos.x, y: pos.y, angle: Math.random() * 6.28, pack,
-    state: 'idle', threat: new Map(), target: null, windUntil: 0, nextAtk: 0, wander: null, nextWander: now + Math.random() * 4,
+    state: 'idle', threat: new Map(), dmgBy: new Map(), target: null, windUntil: 0, nextAtk: 0, wander: null, nextWander: now + Math.random() * 4,
     fleeUntil: 0, fleeFrom: null, kb: null, stunUntil: 0, effects: [], dead: false, respawnAt: 0, active: true,
   };
   grid.insert(m);
@@ -482,6 +488,7 @@ function addThreat(m, p, v) {
 
 // Oyuncu canavara vurduğunda: tehdit ekle, gruba haber ver (Pack Alert), pasifse kaç
 function onMobHit(m, p, amount) {
+  m.dmgBy.set(p.id, (m.dmgBy.get(p.id) || 0) + amount);
   if (m.aggro === 'passive') {
     m.fleeUntil = now + 2.5;
     m.fleeFrom = { x: p.x, y: p.y };
@@ -517,6 +524,7 @@ function pickTarget(m) {
 function startReturn(m) {
   m.state = 'return';
   m.threat.clear();
+  m.dmgBy.clear();
   m.target = null;
   m.windUntil = 0;
   m.kb = null;
@@ -525,7 +533,7 @@ function startReturn(m) {
 // ---- Çarpışma: kayalar, harita kenarı ve köyler (canavar köye giremez). Çarpışma normalini döndürür. ----
 function pushOutMob(m) {
   let nx = 0, ny = 0;
-  const obstacles = MAP.rocks.concat(MAP.villages);
+  const obstacles = MAP.rocks.concat(MAP.villages, stones.filter((s) => !s.dead));
   for (const o of obstacles) {
     const d = dist(m, o);
     const min = o.r + m.r;
@@ -607,11 +615,20 @@ function onMobDeath(m, src) {
     const xp = Math.max(1, Math.round(m.xp * mul));
     gainXp(src, xp);
     events.push({ t: 'xp', id: src.id, v: xp, x: Math.round(m.x), y: Math.round(m.y) });
-    autoLoot(src, m);
   }
+  // ganimet yere düşer; sahibi en çok hasar veren oyuncu
+  const owner = topDamager(m.dmgBy) || (isPlayer(src) ? src : null);
+  spawnDrops(LOOT[m.type].roll(), m, owner, 0.6);
+  m.dmgBy.clear();
 }
 
 function updateMob(m) {
+  if (m.summoned && (m.dead || (m.state === 'idle' && now > m.expireAt))) {
+    // çağrılmış canavarlar yeniden doğmaz
+    grid.remove(m);
+    m.gone = true;
+    return;
+  }
   if (m.dead) {
     if (now >= m.respawnAt) {
       const p = freeSpot(m.home.x, m.home.y, 40, m.r);
@@ -703,6 +720,210 @@ function updateMobs() {
     }
   }
   for (const m of mobs) if (m.active) updateMob(m);
+  for (let i = mobs.length - 1; i >= 0; i--) if (mobs[i].gone) mobs.splice(i, 1);
+}
+
+// ---------------- YERE DÜŞEN GANİMET ----------------
+// Eşyalar ayrı bir ızgarada tutulur (saldırıların hedefi olmasınlar diye).
+const dropGrid = new SpatialGrid(CELL);
+const drops = [];
+let dropSeq = 0;
+const DROP_OWN = 30; // saniye: bu süre boyunca sadece sahibi toplayabilir
+const DROP_LIFE = 120; // saniye: sonra yok olur
+const PICK_R = 90;
+
+// En çok hasar veren (hâlâ oyunda olan) oyuncu
+function topDamager(map) {
+  let best = null, bestV = 0;
+  for (const [pid, v] of map) {
+    const p = players.get(pid);
+    if (p && v > bestV) { bestV = v; best = p; }
+  }
+  return best;
+}
+
+// Eşyaları kaynağın etrafına dairesel olarak saçar: her eşya eşit aralıklı bir açıyla, rastgele bir hızla fırlar,
+// sürtünmeyle yavaşlar ve kayalardan seker.
+function spawnDrops(list, at, owner, power = 1) {
+  const n = list.length;
+  list.forEach((d, i) => {
+    const a = (i / n) * Math.PI * 2 + Math.random() * 0.7;
+    const sp = (170 + Math.random() * 190) * power;
+    const start = (at.r || 15) * 0.6;
+    const g = {
+      id: 'g' + ++dropSeq, drop: true, itemId: d.id || 0, count: d.count || 1, plus: d.plus || 0, gold: d.gold || 0,
+      x: at.x + Math.cos(a) * start, y: at.y + Math.sin(a) * start, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+      ownerChar: owner ? owner.charId : null, ownerName: owner ? owner.n : null, ownUntil: now + DROP_OWN, expireAt: now + DROP_LIFE,
+    };
+    drops.push(g);
+    dropGrid.insert(g);
+  });
+}
+
+function updateDrops() {
+  for (let i = drops.length - 1; i >= 0; i--) {
+    const g = drops[i];
+    if (now >= g.expireAt) { dropGrid.remove(g); drops.splice(i, 1); continue; }
+    if (!g.vx && !g.vy) continue;
+    g.x += g.vx * DT;
+    g.y += g.vy * DT;
+    for (const o of MAP.rocks.concat(stones.filter((s) => !s.dead))) {
+      const d = dist(g, o), min = o.r + 8;
+      if (d < min && d > 0) {
+        const ux = (g.x - o.x) / d, uy = (g.y - o.y) / d;
+        g.x = o.x + ux * min; g.y = o.y + uy * min;
+        const dot = g.vx * ux + g.vy * uy;
+        if (dot < 0) { g.vx -= 1.6 * dot * ux; g.vy -= 1.6 * dot * uy; } // sekme
+      }
+    }
+    g.x = clamp(g.x, 10, MAP.w - 10);
+    g.y = clamp(g.y, 10, MAP.h - 10);
+    g.vx *= 0.86; g.vy *= 0.86;
+    if (Math.hypot(g.vx, g.vy) < 8) { g.vx = 0; g.vy = 0; }
+    dropGrid.update(g);
+  }
+}
+
+// Oyuncunun yakınındaki ganimeti topla
+function pickup(p) {
+  if (p.dead) return;
+  const near = dropGrid.query(p.x, p.y, PICK_R).sort((a, b) => dist(a, p) - dist(b, p));
+  let gold = 0, blocked = null, full = false;
+  const got = [];
+  for (const g of near) {
+    if (g.ownerChar && g.ownerChar !== p.charId && now < g.ownUntil) { blocked = blocked || g; continue; }
+    if (g.gold) {
+      gold += g.gold;
+    } else {
+      const left = I.giveItem(p.inv, g.itemId, g.count, { plus: g.plus });
+      const taken = g.count - left;
+      if (taken > 0) got.push([g.itemId, taken, g.plus]);
+      if (left > 0) { g.count = left; full = true; continue; }
+    }
+    dropGrid.remove(g);
+    drops.splice(drops.indexOf(g), 1);
+  }
+  if (gold) p.gold += gold;
+  if (gold || got.length) {
+    sendTo(p, { t: 'loot', gold, items: got });
+    if (got.length) { recalcStats(p); sendInv(p); saveInv(p); } else sendTo(p, { t: 'gold', gold: p.gold });
+    saveChar(p);
+  }
+  if (full) sendTo(p, { t: 'notice', msg: 'Çantan dolu!' });
+  else if (blocked && !gold && !got.length) {
+    sendTo(p, { t: 'notice', msg: `Bu ganimet ${blocked.ownerName} adlı oyuncuya ait (${Math.ceil(blocked.ownUntil - now)} sn).` });
+  }
+}
+
+// ---------------- BOZULMA TAŞLARI ----------------
+// Hareketsiz, çok canlı ve zırhlı. Canı %80/%60/%40/%20'ye düştükçe etrafına agresif canavar grupları çağırır.
+const STONE_TYPES = {
+  5: { hp: 3000, armor: 0.3, r: 32, loot: 'tas5', summon: ['kurt', 'domuz'], respawn: 90, xp: 400 },
+  10: { hp: 6500, armor: 0.35, r: 36, loot: 'tas10', summon: ['domuz', 'haydut'], respawn: 120, xp: 1000 },
+  15: { hp: 11000, armor: 0.4, r: 40, loot: 'tas15', summon: ['haydut', 'ayi'], respawn: 150, xp: 2200 },
+};
+const STONE_SITES = [
+  [1250, 600, 5], [1750, 600, 5], [650, 1450, 5], [2350, 1450, 5],
+  [1000, 1550, 10], [2000, 1550, 10], [1350, 1550, 10], [1500, 300, 10],
+  [1500, 1100, 15],
+];
+const STONE_THRESHOLDS = [0.8, 0.6, 0.4, 0.2];
+const ACTIVE_STONES = 5;
+const stones = [];
+let stoneSeq = 0;
+
+function placeStone(st) {
+  const used = new Set(stones.filter((s) => s !== st && !s.dead).map((s) => s.site));
+  const free = STONE_SITES.map((_, i) => i).filter((i) => !used.has(i));
+  const site = free[Math.floor(Math.random() * free.length)];
+  const [x, y, lvl] = STONE_SITES[site];
+  const T = STONE_TYPES[lvl];
+  Object.assign(st, {
+    site, x, y, lvl, r: T.r, hp: T.hp, mh: T.hp, armor: T.armor, dead: false, fired: 0, dmgBy: new Map(),
+    n: 'Bozulma Taşı', effects: [], stunUntil: 0, angle: 0,
+  });
+  grid.update(st);
+}
+
+for (let i = 0; i < ACTIVE_STONES; i++) {
+  const st = { id: 's' + ++stoneSeq, stone: true, x: 0, y: 0 };
+  stones.push(st);
+  grid.insert(st);
+  placeStone(st);
+}
+
+function summonWave(st, target) {
+  const T = STONE_TYPES[st.lvl];
+  const groups = 3 + (Math.random() < 0.5 ? 1 : 0);
+  for (let g = 0; g < groups; g++) {
+    const a = Math.random() * Math.PI * 2, d = st.r + 110 + Math.random() * 110;
+    const center = { x: st.x + Math.cos(a) * d, y: st.y + Math.sin(a) * d };
+    const type = T.summon[Math.floor(Math.random() * T.summon.length)];
+    const count = 2 + (Math.random() < 0.5 ? 1 : 0);
+    const pack = [];
+    for (let k = 0; k < count; k++) {
+      const m = makeMob(type, center, pack);
+      Object.assign(m, { summoned: true, aggro: 'aggr', sight: 320, expireAt: now + 150 });
+      pack.push(m);
+      if (target) addThreat(m, target, 5);
+    }
+    events.push({ t: 'summon', x: Math.round(center.x), y: Math.round(center.y) });
+  }
+}
+
+function onStoneHit(st, p, amount) {
+  st.dmgBy.set(p.id, (st.dmgBy.get(p.id) || 0) + amount);
+  while (st.fired < STONE_THRESHOLDS.length && st.hp / st.mh <= STONE_THRESHOLDS[st.fired]) {
+    st.fired++;
+    summonWave(st, topDamager(st.dmgBy) || p);
+  }
+}
+
+function onStoneDeath(st, src) {
+  st.dead = true;
+  const T = STONE_TYPES[st.lvl];
+  st.respawnAt = now + T.respawn;
+  grid.remove(st);
+  const owner = topDamager(st.dmgBy) || (isPlayer(src) ? src : null);
+  // tecrübe: hasar payına göre paylaştırılır
+  let total = 0;
+  for (const v of st.dmgBy.values()) total += v;
+  for (const [pid, v] of st.dmgBy) {
+    const p = players.get(pid);
+    if (!p) continue;
+    const xp = Math.round(T.xp * (0.3 + 0.7 * (v / total)));
+    gainXp(p, xp);
+    events.push({ t: 'xp', id: p.id, v: xp, x: Math.round(st.x), y: Math.round(st.y) });
+  }
+  spawnDrops(LOOT[T.loot].roll(), st, owner, 1.3);
+  events.push({ t: 'stoneBreak', x: Math.round(st.x), y: Math.round(st.y), r: st.r });
+  if (owner) events.push({ t: 'sys', msg: `${owner.n}, Sv.${st.lvl} Bozulma Taşı'nı kırdı!` });
+}
+
+function updateStones() {
+  for (const st of stones) {
+    if (st.dead && now >= st.respawnAt) {
+      placeStone(st);
+      grid.insert(st);
+      events.push({ t: 'sys', msg: `Bir yerde Sv.${st.lvl} Bozulma Taşı belirdi...` });
+    } else if (!st.dead && st.dmgBy.size && st.hp < st.mh) {
+      // kimse vurmuyorsa (yakında oyuncu yoksa) yavaşça iyileşir
+      if (!grid.query(st.x, st.y, 600, isPlayer).length) {
+        st.hp = Math.min(st.mh, st.hp + st.mh * 0.02 * DT);
+        if (st.hp >= st.mh) { st.dmgBy.clear(); st.fired = 0; }
+      }
+    }
+  }
+}
+
+// ---------------- BECERİ SEVİYELERİ ----------------
+const SKILL_IDS = { q: 1, e: 2, r: 3, f: 4 };
+const MAX_SKILL_LV = 20;
+const skillMul = (p, key) => 1 + 0.04 * ((p.skillLv[key] || 1) - 1); // her seviye +%4
+
+function saveSkills(p) {
+  return db.saveSkills(p.charId, SKILL_KEYS.map((k) => ({ skillId: SKILL_IDS[k], level: p.skillLv[k], grade: 0 })))
+    .catch((e) => console.error('Beceri kayıt hatası:', e.message));
 }
 
 // ---------------- OYUN DÖNGÜSÜ ----------------
@@ -824,6 +1045,8 @@ function update() {
   }
 
   updateMobs();
+  updateStones();
+  updateDrops();
 
   // kuklalar yeniden doğar
   for (const d of dummies) {
@@ -863,8 +1086,19 @@ function broadcast() {
     const plist = [];
     const dlist = [];
     const mlist = [];
+    const slist = [];
+    const glist = dropGrid.query(vx, vy, VIEW_R).map((g) => {
+      const other = g.ownerChar && g.ownerChar !== me.charId && now < g.ownUntil;
+      return {
+        id: g.id, i: g.itemId, g: g.gold, n: g.count, p: g.plus, x: Math.round(g.x), y: Math.round(g.y),
+        o: other ? g.ownerName : undefined, ot: other ? Math.ceil(g.ownUntil - now) : undefined,
+        m: g.ownerChar === me.charId && now < g.ownUntil ? 1 : 0,
+      };
+    });
     for (const e of vis) {
-      if (e.mob) {
+      if (e.stone) {
+        slist.push({ id: e.id, x: e.x, y: e.y, r: e.r, hp: Math.round(e.hp), mh: e.mh, l: e.lvl });
+      } else if (e.mob) {
         mlist.push(mobView(e));
       } else if (e.dummy) {
         dlist.push({ id: e.id, x: e.x, y: e.y, hp: Math.round(e.hp), mh: e.mh, dead: e.dead, st: e.stunUntil > now });
@@ -882,6 +1116,8 @@ function broadcast() {
       players: plist,
       dummies: dlist,
       mobs: mlist,
+      stones: slist,
+      drops: glist,
       proj: projectiles.filter(near).map((p) => [Math.round(p.x), Math.round(p.y), p.kind]),
       ev: globalEv.concat(localEv.filter(near)),
       me: {
@@ -917,29 +1153,6 @@ function giveStarterKit(p) {
   saveChar(p);
 }
 
-// GEÇİCİ: canavar ganimeti doğrudan çantaya gelir (Aşama 5'te yere düşen ganimet sistemine dönüşecek)
-const MOB_LOOT = {
-  tilki: [],
-  kurt: [[3001, 0.08]],
-  domuz: [[3001, 0.15], [5001, 0.02]],
-  haydut: [[3001, 0.2], [3002, 0.04], [4001, 0.03], [5001, 0.03], [5002, 0.02]],
-  ayi: [[3002, 0.15], [3003, 0.06], [4002, 0.05], [5001, 0.08], [5002, 0.06]],
-};
-function autoLoot(p, m) {
-  const gold = m.lvl * 8 + Math.floor(Math.random() * (m.lvl * 6 + 5));
-  p.gold += gold;
-  const got = [];
-  for (const [id, chance] of MOB_LOOT[m.type] || []) {
-    if (Math.random() < chance) {
-      if (I.giveItem(p.inv, id, 1) === 0) got.push(id);
-      else sendTo(p, { t: 'notice', msg: 'Çantan dolu! Ganimet alınamadı.' });
-    }
-  }
-  sendTo(p, { t: 'loot', gold, items: got });
-  if (got.length) { sendInv(p); saveInv(p); }
-  else sendTo(p, { t: 'gold', gold: p.gold });
-}
-
 function sendInv(p) {
   sendTo(p, {
     t: 'inv', gold: p.gold,
@@ -966,6 +1179,24 @@ const nearSmith = (p) => MAP.smiths.some((s) => dist(p, s) <= SMITH_RANGE);
 const slotArg = (v, max) => Number.isInteger(v) && v >= 0 && v < max;
 
 const ITEM_HANDLERS = {
+  pickup(p) { pickup(p); },
+
+  // Beceri Kitabı oku: seçilen becerinin seviyesi +1
+  useBook(p, m) {
+    if (!slotArg(m.slot, I.BAG_SIZE) || !SKILL_KEYS.includes(m.k)) return p.monitor.flag('invalidAction', 'useBook');
+    const it = I.find(p.inv, I.BAG, m.slot);
+    if (!it || it.itemId !== 6001) return;
+    if (p.skillLv[m.k] >= MAX_SKILL_LV) return sendTo(p, { t: 'notice', msg: 'Bu beceri zaten en yüksek seviyede.' });
+    it.count--;
+    if (it.count <= 0) p.inv.splice(p.inv.indexOf(it), 1);
+    p.skillLv[m.k]++;
+    saveSkills(p);
+    sendInv(p);
+    saveInv(p);
+    sendTo(p, { t: 'skills', lv: p.skillLv });
+    sendTo(p, { t: 'notice', msg: `${CLASSES[p.cls].skills[m.k].name} seviye ${p.skillLv[m.k]} oldu!` });
+  },
+
   // çantadaki eşyayı kuşan (yuvada eşya varsa yer değiştirir)
   equip(p, m) {
     if (!slotArg(m.slot, I.BAG_SIZE)) return p.monitor.flag('invalidAction', 'equip');
@@ -1173,6 +1404,11 @@ const handlers = {
     me.inv = await db.getInventory(c.id);
     me.saveChain = Promise.resolve();
     if (me.inv.length === 0) giveStarterKit(me);
+    me.skillLv = { q: 1, e: 1, r: 1, f: 1 };
+    for (const sk of await db.getSkills(c.id)) {
+      const key = SKILL_KEYS.find((k) => SKILL_IDS[k] === sk.skillId);
+      if (key) me.skillLv[key] = Math.min(MAX_SKILL_LV, Math.max(1, sk.level));
+    }
     recalcStats(me);
     me.hp = me.mh;
     me.mp = me.mm;
@@ -1199,6 +1435,7 @@ const handlers = {
       upgrade: I.UPGRADE.map((u) => ({ chance: u.chance, gold: u.gold, mat: u.mat || null })),
     });
     sendInv(me);
+    sendTo(me, { t: 'skills', lv: me.skillLv });
     events.push({ t: 'sys', msg: `${me.n} oyuna katıldı (${FACTIONS[me.f].short} · ${CLASSES[me.cls].name})` });
   },
 
@@ -1316,4 +1553,4 @@ db.ready.then(() => {
 });
 
 // Testler için iç yapılar (oyun davranışını etkilemez)
-module.exports = { mobs, players, MAP, applyKnockback, updateMob, getNow: () => now };
+module.exports = { mobs, players, MAP, stones, drops, grid, dropGrid, applyKnockback, updateMob, getNow: () => now };

@@ -96,6 +96,8 @@
 
   /* Çanta ve demirci */
   #bInv { position: absolute; left: 140px; top: 92px; pointer-events: auto; background: #0009; color: #e8b04a; border: 1px solid #6b4a2a; border-radius: 8px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+  #pickHint { position: absolute; left: 230px; top: 96px; font-size: 12px; color: #c9a98a; text-shadow: 0 1px 2px #000; }
+  body.touch #pickHint { display: none; }
   #smithHint { position: absolute; left: 50%; top: 70px; transform: translateX(-50%); background: #000b; border: 1px solid #e8b04a; border-radius: 8px; padding: 6px 12px; font-size: 14px; }
   .ipanel { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 12; width: min(680px, 96vw); max-height: 92vh; overflow-y: auto;
     background: #1e100ef2; border: 2px solid #6b4a2a; border-radius: 14px; box-shadow: 0 10px 40px #000a; touch-action: auto; }
@@ -129,6 +131,7 @@
   #smithWarn { color: #ff6a5a; font-size: 13px; min-height: 18px; margin-top: 4px; }
   #smithResult { margin-top: 10px; font-weight: bold; min-height: 22px; }
   #tInv { left: 50%; top: 10px; transform: translateX(calc(-50% + 56px)); width: 44px; height: 44px; font-size: 18px; border-radius: 10px; }
+  #tPick { right: 30px; bottom: 300px; width: 52px; height: 52px; font-size: 22px; background: #ffd04a33; }
   #tSmith { left: 50%; top: 10px; transform: translateX(calc(-50% + 112px)); width: 44px; height: 44px; font-size: 18px; border-radius: 10px; background: #e8b04a33; }
   body.touch #bInv { display: none; }
 
@@ -227,6 +230,7 @@
   <div id="info"></div>
   <button id="exit">⟵ Karakter seç</button>
   <button id="bInv">🎒 Çanta (I)</button>
+  <div id="pickHint">Z: Topla</div>
   <div id="smithHint" class="hidden">🔨 Demirciyi açmak için <b>G</b></div>
   <div id="board"><h4>🏆 EN İYİLER</h4><div id="boardList"></div></div>
   <div id="feed"></div>
@@ -257,6 +261,7 @@
   <div class="tb" id="tChat">💬</div>
   <div class="tb" id="tInv">🎒</div>
   <div class="tb hidden" id="tSmith">🔨</div>
+  <div class="tb hidden" id="tPick">🖐</div>
 </div>
 
 <!-- ÇANTA -->

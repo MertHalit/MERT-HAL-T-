@@ -23,6 +23,7 @@ const ITEMS = {
   4002: { name: 'Büyülü Metal', kind: 'scroll', stack: 50, w: 1, h: 1, desc: 'Yükseltme başarısız olursa eşyanın seviyesi değişmez' },
   5001: { name: 'Efsun Taşı', kind: 'bonus', stack: 50, w: 1, h: 1, desc: 'Eşyaya yeni bir efsun ekler (en fazla 5)' },
   5002: { name: 'Değişim Tozu', kind: 'bonus', stack: 50, w: 1, h: 1, desc: 'Eşyadaki efsunları yeniden çeker' },
+  6001: { name: 'Beceri Kitabı', kind: 'book', stack: 20, w: 1, h: 1, desc: 'Okuyunca seçtiğin becerinin seviyesi 1 artar (en fazla 20)' },
 };
 const EQUIP_KINDS = ['weapon', 'armor', 'helmet'];
 const EQUIP_SLOT = { weapon: 0, armor: 1, helmet: 2 };

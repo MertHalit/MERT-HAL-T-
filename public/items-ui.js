@@ -7,7 +7,7 @@ window.itemsUI = (() => {
   let smithSel = null;
   const BAG = 0, EQUIP = 1, BAG_SIZE = 30;
   const EQUIP_NAMES = ['Silah', 'Zırh', 'Miğfer'];
-  const ICON = { 1001: '⚔️', 1011: '🗡️', 1021: '⚔️', 1031: '🪄', 2001: '🥋', 2101: '⛑️', 3001: '🪨', 3002: '🌙', 3003: '🔶', 4001: '📜', 4002: '🔩', 5001: '💎', 5002: '✨' };
+  const ICON = { 1001: '⚔️', 1011: '🗡️', 1021: '⚔️', 1031: '🪄', 2001: '🥋', 2101: '⛑️', 3001: '🪨', 3002: '🌙', 3003: '🔶', 4001: '📜', 4002: '🔩', 5001: '💎', 5002: '✨', 6001: '📘' };
   const PROT_NAMES = ['Standart (başarısızlıkta YANAR)', 'Kutsama Parşömeni (1 seviye düşer)', 'Büyülü Metal (seviye korunur)'];
   const PROT_ITEM = [null, 4001, 4002];
 
@@ -89,6 +89,15 @@ window.itemsUI = (() => {
     det.appendChild(el('b', null, itemTitle(it)));
     for (const [txt, col] of detailLines(it)) { const l = el('div', null, txt); l.style.color = col; det.appendChild(l); }
     const acts = el('div', 'acts');
+    if (it.id === 6001 && it.c === BAG) {
+      const c = CLASSES[state.players.find((p) => p.id === myId).c];
+      for (const k of ['q', 'e', 'r', 'f']) {
+        const lv = skillLv[k] || 1;
+        const b = btn(`📘 ${k.toUpperCase()}: ${c.skills[k].name} (Sv.${lv}${lv >= 20 ? ' MAKS' : ''})`, () => send({ t: 'useBook', slot: it.s, k }));
+        if (lv >= 20) b.disabled = true;
+        acts.appendChild(b);
+      }
+    }
     if (isEquip(it.id)) {
       if (it.c === BAG) acts.appendChild(btn('Kuşan', () => send({ t: 'equip', slot: it.s })));
       else acts.appendChild(btn('Çıkar', () => send({ t: 'unequip', slot: it.s })));
@@ -196,11 +205,14 @@ window.itemsUI = (() => {
     } else if (m.t === 'gold') {
       gold = m.gold; renderInv(); renderSmith();
     } else if (m.t === 'loot') {
-      gold += 0; // altın 'gold'/'inv' mesajıyla güncellenir
-      const names = m.items.map((id) => ITEMS[id].name);
-      if (names.length) addChat(`Ganimet: ${names.join(', ')}`, true);
+      const names = m.items.map(([id, n, p]) => ITEMS[id].name + (p ? ` +${p}` : '') + (n > 1 ? ` ×${n}` : ''));
+      if (names.length) addChat(`Topladın: ${names.join(', ')}`, true);
       const me = state && state.players.find((p) => p.id === myId);
-      if (me) floaters.push({ x: me.x + 20, y: me.y - 60, txt: `+${m.gold} altın`, col: '#ffd04a', t: performance.now() });
+      if (me && m.gold) floaters.push({ x: me.x + 20, y: me.y - 60, txt: `+${m.gold} altın`, col: '#ffd04a', t: performance.now() });
+      if (me && names.length) floaters.push({ x: me.x - 20, y: me.y - 75, txt: names[0] + (names.length > 1 ? ` +${names.length - 1}` : ''), col: '#ffffff', t: performance.now() });
+    } else if (m.t === 'skills') {
+      skillLv = m.lv;
+      renderInv();
     } else if (m.t === 'notice') {
       addChat(m.msg, true); toast(m.msg);
     } else if (m.t === 'upRes') {
