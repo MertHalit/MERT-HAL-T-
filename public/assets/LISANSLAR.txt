@@ -1,0 +1,22 @@
+3D MODELLER VE LİSANSLARI
+
+Bu klasördeki bütün modeller CC0 (Creative Commons Zero) lisanslıdır:
+kişisel, eğitim ve ticari projelerde ücretsiz ve izin almadan kullanılabilir.
+https://creativecommons.org/publicdomain/zero/1.0/
+
+- char_*.glb, anim_humanoid.glb, w_sword_1handed.glb
+  KayKit Adventurers Character Pack 1.0 — Kay Lousberg (www.kaylousberg.com)
+
+- mob_*.glb (kurt, tilki, boğa, örümcek)
+  Quaternius — Ultimate Animated Animal Pack, Easy Enemy Pack (quaternius.com)
+
+- n_*.glb (ağaçlar, kayalar, çalılar, çimen)
+  Quaternius — Ultimate Nature Pack
+
+- v_*.glb (evler, kuyu, fıçı, sandık, araba, kamp ateşi, bank)
+  Quaternius — Medieval Village Pack
+
+Modeller oyuna uygun hale getirilmiştir (kullanılmayan animasyonlar çıkarıldı,
+dokular küçültüldü, geometri sıkıştırıldı).
+
+Three.js (public/vendor/three.min.js): MIT lisansı — public/vendor/three.LICENSE.txt

@@ -33,4 +33,5 @@ bir PostgreSQL veritabanı (örneğin Neon, ücretsiz) aç ve bağlantı adresin
 - `aoi.js`: görüş alanı ızgarası
 - `anticheat.js`: hile koruması
 - `docs/MIMARI.md`: mimari açıklaması
-- `public/`: oyun ekranı
+- `public/`: oyun ekranı (`render3d.js` 3D grafik, `gfx.js` 2D yedek grafik)
+- `public/assets/`: CC0 3D modeller (lisanslar `LISANSLAR.txt` içinde)

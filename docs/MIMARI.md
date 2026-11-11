@@ -209,3 +209,21 @@ Bütün görseller kodla çizilir. Dışarıdan hazır çizim, model ya da doku 
 - **Canavarlar:** Tilki (kabarık kuyruk), kurt, yaban domuzu (dişler, yele), kara ayı (yuvarlak kulaklar) yürüme animasyonlu. Saldırı hazırlığında gözler kırmızıya döner. Dağ Haydudu maskeli insan olarak çizilir.
 - **Efektler:** Vuruş kıvılcımları (kritikte sarı, arkadan vuruşta mor), güçlü vuruşta ve taş kırılınca ekran sarsıntısı, seviye atlamada altın parçacıklar, parlayan mermiler, ekran kenarı gölgelendirmesi (vinyet), kenarlıklı hasar sayıları.
 - **Sunucu tarafı:** Ağaç gövdeleri ve evler gerçek engeldir (`MAP.solids`). Hareket denetimi artık çarpışma itmesinden önce yapılıyor, böylece engelin içinde kalan oyuncu yanlışlıkla hile şüphesiyle atılmaz. Kaydedilmiş konumu bir engelin içinde kalan oyuncu kendi köyünde başlar.
+
+# 3D Grafik (`public/render3d.js`)
+
+- **Motor:** Three.js 0.186.1, esbuild ile tek dosyada (`public/vendor/three.min.js`). Sunucu gzip ile sıkıştırarak gönderir (~200 KB).
+- **Modeller (hepsi CC0, `public/assets/LISANSLAR.txt`):**
+  - KayKit Adventurers: Savaşçı = şövalye (çift elli kılıç), Gölge Avcı = kapüşonlu suikastçı (iki hançer), Ruh Kılıcı = barbar (mavi parlayan kılıç), Şaman = büyücü (asa), Dağ Haydudu = haydut, demirci = barbar.
+  - Quaternius: Kızıl Tilki = tilki, Boz Kurt = kurt, Yaban Boğası = boğa, Dev Örümcek = örümcek. Ayrıca çam ve yapraklı ağaçlar (kiraz rengine boyanmış), yosunlu kayalar, çalı ve çimen, köy evleri, kuyu, fıçı, sandık, el arabası, kamp ateşi.
+  - Modeller `gltf-transform` ile küçültüldü: insan animasyonları ortak tek dosyada (`anim_humanoid.glb`, 26 animasyon), dokular 256-512 px, geometri sıkıştırıldı. Toplam 20 MB'tan 6,4 MB'a, gzip ile yaklaşık 3,5 MB indirme.
+- **Koordinatlar:** Sunucu 2D piksel kullanır, istemcide 1 metre = 40 piksel olarak 3D'ye çevrilir. Sunucuda hiçbir oyun kuralı değişmedi.
+- **Animasyonlar:** Durma, koşma (hıza göre), sınıfa özel saldırılar, büyü, darbe alma, ölme, pazarda bağdaş kurup oturma. Canavarlarda yürüme, dörtnala koşma, saldırı (sunucudaki saldırı hazırlığına bağlı), ölme ve yavaşça kaybolma.
+- **Performans:**
+  - Ağaç, kaya, çimen gibi tekrar eden modeller `InstancedMesh` ile tek çizim çağrısında çizilir.
+  - Arazi tek bir dokuya çizilir (masaüstü 4096 px, telefon 2048 px), yakından çimen detay dokusuyla zenginleştirilir.
+  - Telefonda gölgeler kapalıdır, piksel oranı 1,25 ile sınırlıdır, daha az çimen çizilir.
+- **Kamera:** Karakterin arkasından ve yukarıdan bakar. PC'de sağ tık ile sürükleyerek döner, tekerlekle yakınlaşır. Telefonda boş ekranda tek parmakla döner, iki parmakla yakınlaşır. Kamerayla karakter arasına giren ağaç ve evler gizlenir.
+- **Kontrol:** WASD ve joystick kameraya göre çalışır. İstemci sunucuya analog bir yön vektörü (`mx`, `my`) gönderir; sunucu bu vektörü en fazla 1'e sınırlar, yani hız hilesi mümkün değildir. PC'de nişan, farenin zemine düştüğü noktaya alınır.
+- **Etiketler:** İsimler, can çubukları, hasar sayıları ve pazar tabelaları 3D sahnenin üstündeki 2D katmanda, 3D konumların ekrana izdüşümüyle çizilir.
+- **Yedek:** WebGL yoksa ya da oyuncu "⚙️ Grafik: 2D" seçerse eski 2D grafik motoru (`gfx.js`) kullanılır.

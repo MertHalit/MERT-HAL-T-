@@ -1,6 +1,7 @@
 // PvP Server - yetkili (authoritative) oyun sunucusu
 // Bütün oyun kuralları burada hesaplanır; istemci sadece tuş bilgisi gönderir.
 const http = require('http');
+const zlib = require('zlib');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -425,9 +426,9 @@ function explode(pr, owner) {
 const MOB_TYPES = {
   tilki: { name: 'Kızıl Tilki', lvl: 1, hp: 60, dmg: 5, speed: 150, r: 15, aggro: 'passive', color: '#d9772b', shape: 'beast', xp: 18, respawn: 15 },
   kurt: { name: 'Boz Kurt', lvl: 3, hp: 130, dmg: 9, speed: 175, r: 17, aggro: 'semi', color: '#8a8f99', shape: 'beast', xp: 40, respawn: 18 },
-  domuz: { name: 'Yaban Domuzu', lvl: 5, hp: 220, dmg: 13, speed: 160, r: 20, aggro: 'semi', color: '#6b4a32', shape: 'beast', xp: 70, respawn: 20 },
+  domuz: { name: 'Yaban Boğası', lvl: 5, hp: 220, dmg: 13, speed: 160, r: 20, aggro: 'semi', color: '#6b4a32', shape: 'beast', xp: 70, respawn: 20 },
   haydut: { name: 'Dağ Haydudu', lvl: 8, hp: 320, dmg: 18, speed: 170, r: 19, aggro: 'aggr', color: '#5a5f2a', shape: 'human', xp: 120, respawn: 25, sight: 230 },
-  ayi: { name: 'Kara Ayı', lvl: 12, hp: 900, dmg: 32, speed: 150, r: 28, aggro: 'aggr', color: '#2b2420', shape: 'beast', xp: 320, respawn: 45, sight: 200, heavy: false },
+  ayi: { name: 'Dev Örümcek', lvl: 12, hp: 900, dmg: 32, speed: 150, r: 28, aggro: 'aggr', color: '#2b2420', shape: 'beast', xp: 320, respawn: 45, sight: 200, heavy: false },
 };
 // Grup = [tür, merkez x, merkez y, kaç tane]
 const SPAWN_GROUPS = [
@@ -477,7 +478,7 @@ for (const [type, x, y, count] of SPAWN_GROUPS) {
 function mobView(m) {
   return {
     id: m.id, t: m.type, x: Math.round(m.x), y: Math.round(m.y), a: +m.angle.toFixed(2), hp: Math.round(m.hp), mh: m.mh, l: m.lvl,
-    st: m.stunUntil > now ? 1 : 0, w: m.windUntil > now ? 1 : 0, s: m.state === 'return' ? 'r' : m.target ? 'c' : 'i',
+    st: m.stunUntil > now ? 1 : 0, w: m.windUntil > now ? 1 : 0, s: m.state === 'return' ? 'r' : m.target ? 'c' : 'i', d: m.dead ? 1 : 0,
   };
 }
 
@@ -975,12 +976,14 @@ function update() {
     } else {
       p.dash = null;
       if (!stunned && !p.shop) {
-        const mx = (inp.right ? 1 : 0) - (inp.left ? 1 : 0);
-        const my = (inp.down ? 1 : 0) - (inp.up ? 1 : 0);
+        let mx = (inp.right ? 1 : 0) - (inp.left ? 1 : 0);
+        let my = (inp.down ? 1 : 0) - (inp.up ? 1 : 0);
+        if (inp.mx || inp.my) { mx = inp.mx; my = inp.my; }
         const len = Math.hypot(mx, my);
-        if (len) {
-          p.x += (mx / len) * speed * DT;
-          p.y += (my / len) * speed * DT;
+        if (len > 0.05) {
+          const k = Math.min(1, len) / len; // en fazla tam hız
+          p.x += mx * k * speed * DT;
+          p.y += my * k * speed * DT;
         }
       }
     }
@@ -1625,9 +1628,10 @@ function removePlayer(p) {
 // ---------------- HTTP + WEBSOCKET ----------------
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css',
-  '.json': 'application/manifest+json', '.svg': 'image/svg+xml', '.png': 'image/png',
+  '.json': 'application/manifest+json', '.svg': 'image/svg+xml', '.png': 'image/png', '.glb': 'model/gltf-binary', '.txt': 'text/plain; charset=utf-8',
 };
 const PUBLIC = path.join(__dirname, 'public');
+const gzCache = new Map();
 const server = http.createServer((req, res) => {
   let file = req.url.split('?')[0];
   if (file === '/') file = '/index.html';
@@ -1635,7 +1639,19 @@ const server = http.createServer((req, res) => {
   if (!full.startsWith(PUBLIC + path.sep)) { res.writeHead(403); return res.end(); }
   fs.readFile(full, (err, data) => {
     if (err) { res.writeHead(404); return res.end('Bulunamadı'); }
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(full)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
+    // metin dosyalarını sıkıştırarak gönder (three.min.js ~780 KB -> ~200 KB)
+    const ext = path.extname(full);
+    if (['.js', '.html', '.css', '.json', '.svg', '.glb'].includes(ext) && /\bgzip\b/.test(req.headers['accept-encoding'] || '')) {
+      const key = full + ':' + data.length;
+      let gz = gzCache.get(key);
+      if (!gz) { gz = zlib.gzipSync(data, { level: 9 }); gzCache.set(key, gz); }
+      const cache = /\/(assets|vendor)\//.test(full) ? 'public, max-age=86400' : 'no-cache';
+      res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Content-Encoding': 'gzip', 'Cache-Control': cache, Vary: 'Accept-Encoding' });
+      return res.end(gz);
+    }
+    // modeller ve kütüphaneler değişmez: tarayıcı bir gün önbellekte tutsun
+    const cache = /\/(assets|vendor)\//.test(full) ? 'public, max-age=86400' : 'no-cache';
+    res.writeHead(200, { 'Content-Type': MIME[path.extname(full)] || 'application/octet-stream', 'Cache-Control': cache });
     res.end(data);
   });
 });
@@ -1675,6 +1691,8 @@ wss.on('connection', (ws) => {
         const i = me.input;
         i.up = m.up === true; i.down = m.down === true; i.left = m.left === true; i.right = m.right === true; i.atk = m.atk === true;
         if (Number.isFinite(m.angle) && Math.abs(m.angle) <= 7) i.angle = m.angle;
+        // analog hareket (3D kamera her yöne yürümeye izin verir): -1..1 arası vektör
+        if (Number.isFinite(m.mx) && Number.isFinite(m.my)) { i.mx = clamp(m.mx, -1, 1); i.my = clamp(m.my, -1, 1); } else { i.mx = i.my = 0; }
         return;
       }
       if (m.t === 'skill') {

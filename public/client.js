@@ -186,6 +186,15 @@ $('#cName').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#cGo'
 $('#cBack').onclick = () => { show('scrSelect'); renderSelect(); };
 
 $('#exit').onclick = () => { send({ t: 'leave' }); };
+// Grafik seçimi: 3D (varsayılan) / 2D (eski ve zayıf cihazlar için)
+function gfxMode() { try { return localStorage.getItem('pvp_gfx') === '2d' || /[?&]gfx=2d/.test(location.search) ? '2d' : '3d'; } catch { return '3d'; } }
+$('#bGfx').textContent = `⚙️ Grafik: ${gfxMode().toUpperCase()}`;
+$('#bGfx').onclick = () => {
+  const next = gfxMode() === '3d' ? '2d' : '3d';
+  if (!confirm(`Grafik ${next.toUpperCase()} olarak değiştirilsin mi? Sayfa yeniden yüklenecek.`)) return;
+  try { localStorage.setItem('pvp_gfx', next); } catch {}
+  location.href = location.pathname;
+};
 
 // ---------------- MESAJLAR ----------------
 let creating = false;
@@ -225,6 +234,7 @@ function handle(m) {
     }
     if (window.itemsUI) itemsUI.init(m);
     gfx.init(MAP);
+    if (window.r3d) { r3d.reset(); r3d.init(); }
     if (window.shopUI) shopUI.reset();
     for (const id of ['#shopSetup', '#shopView']) $(id).classList.add('hidden');
     toast(`${FACTIONS[myFaction].name}'na hoş geldin!`);
@@ -236,6 +246,7 @@ function handle(m) {
     if (m.board) board = m.board;
     // görüş alanından çıkanları unut
     const seen = new Set(m.players.map((p) => p.id).concat((m.mobs || []).map((x) => x.id)));
+    m.mobs = (m.mobs || []).filter((x) => !x.d || window.r3d); // 2D'de ölü canavar gösterilmez
     for (const x of m.mobs || []) {
       const v = view.get(x.id);
       if (!v || Math.hypot(v.x - x.x, v.y - x.y) > 300) view.set(x.id, { x: x.x, y: x.y });
@@ -272,6 +283,7 @@ function toast(text) {
 function onEvent(ev) {
   const t = performance.now();
   gfx.onEvent(ev);
+  if (window.r3d) r3d.onEvent(ev);
   if (ev.t === 'dmg') {
     const txt = (ev.bs ? 'ARKADAN! ' : '') + (ev.p ? 'DELİCİ ' : '') + (ev.c ? 'KRİTİK ' : '') + '-' + ev.v;
     floaters.push({ x: ev.x + (Math.random() * 20 - 10), y: ev.y - 30, txt, col: ev.bs ? '#ff3aff' : ev.c ? '#ffd04a' : '#ff5a4a', t, big: ev.c || ev.bs });
@@ -399,7 +411,7 @@ holdButton($('#tChat'), () => {
 });
 
 // Telefonda en yakın düşmana otomatik nişan
-function autoAim(me) {
+function autoAim(me, mv) {
   let best = null, bd = 520;
   for (const p of state.players) {
     if (p.id === myId || p.dead || p.f === myFaction) continue;
@@ -411,7 +423,9 @@ function autoAim(me) {
     const dd = Math.hypot(d.x - me.x, d.y - me.y);
     if (dd < bd) { bd = dd; best = d; }
   }
-  return best ? Math.atan2(best.y - me.y, best.x - me.x) : touchState.lastAngle;
+  if (best) return Math.atan2(best.y - me.y, best.x - me.x);
+  if (mv && Math.hypot(mv.x, mv.y) > 0.2) { touchState.lastAngle3 = Math.atan2(mv.y, mv.x); return touchState.lastAngle3; }
+  return mv ? (touchState.lastAngle3 ?? me.a) : touchState.lastAngle;
 }
 
 let lastSent = '', lastSendTime = 0;
@@ -420,17 +434,31 @@ function sendInput(force) {
   const me = state.players.find((p) => p.id === myId);
   if (!me) return;
   let inp;
+  const r3 = window.r3d && r3d.ready;
   if (isTouch) {
     inp = {
       t: 'input', up: touchState.my < -0.35, down: touchState.my > 0.35, left: touchState.mx < -0.35, right: touchState.mx > 0.35,
       atk: touchState.atk, angle: +autoAim(me).toFixed(3),
     };
+    if (r3) { // 3D: joystick kameraya göre
+      const v = r3d.moveVector(-touchState.my, touchState.mx);
+      inp = { t: 'input', mx: +v.x.toFixed(3), my: +v.y.toFixed(3), atk: touchState.atk, angle: +autoAim(me, v).toFixed(3) };
+    }
   } else {
     const k = chatting ? {} : keys;
     inp = {
       t: 'input', up: !!(k.w || k.arrowup), down: !!(k.s || k.arrowdown), left: !!(k.a || k.arrowleft), right: !!(k.d || k.arrowright),
       atk: !chatting && (mouse.down || !!k[' ']), angle: +Math.atan2(mouse.y - H / 2, mouse.x - W / 2).toFixed(3),
     };
+    if (r3) { // 3D: WASD kameraya göre, nişan farenin zemindeki noktasına
+      const fwd = (inp.up ? 1 : 0) - (inp.down ? 1 : 0), right = (inp.right ? 1 : 0) - (inp.left ? 1 : 0);
+      const v = r3d.moveVector(fwd, right);
+      const len = Math.hypot(v.x, v.y) || 1;
+      const mv = view.get(me.id) || me;
+      const gp = r3d.groundPoint(mouse.x, mouse.y);
+      const ang = gp && (mouse.x || mouse.y) ? Math.atan2(gp.y - mv.y, gp.x - mv.x) : fwd || right ? Math.atan2(v.y, v.x) : me.a;
+      inp = { t: 'input', mx: +(v.x / len).toFixed(3) * (fwd || right ? 1 : 0), my: +(v.y / len).toFixed(3) * (fwd || right ? 1 : 0), atk: inp.atk, angle: +ang.toFixed(3) };
+    }
   }
   const s = JSON.stringify(inp);
   const t = performance.now();
@@ -454,7 +482,8 @@ const fColor = (f) => (FACTIONS[f] ? FACTIONS[f].color : '#fff');
 
 // Dünya çizimi gfx.js'de (zemin, dekor, karakterler, efektler)
 function drawWorld(cam) {
-  gfx.drawWorld(cam);
+  if (window.r3d && r3d.ready && r3d.render(cam)) return; // 3D
+  gfx.drawWorld(cam); // 3D hazır değilse ya da desteklenmiyorsa 2D
 }
 
 function stars(x, y) {
@@ -510,6 +539,15 @@ let lastCam = { x: 0, y: 0 };
 // haritaya tıklama: pazar tabelası
 cv.addEventListener('click', (e) => {
   if (!myId || !window.shopUI) return;
+  if (window.r3d && r3d.ready) { // 3D: tabelanın ekrandaki yerine tıklandı mı?
+    for (const p of state.players) {
+      if (!p.sp || p.id === myId) continue;
+      const v = view.get(p.id) || p;
+      const s = r3d.project(v.x, v.y, 2.25);
+      if (s && Math.abs(e.clientX - s.x) < 85 && e.clientY > s.y - 55 && e.clientY < s.y + 30) { send({ t: 'viewShop', id: p.id }); return; }
+    }
+    return;
+  }
   const z = ZOOM();
   shopUI.clickWorld(lastCam.x + (e.clientX - W / 2) / z, lastCam.y + (e.clientY - H / 2) / z);
 });
